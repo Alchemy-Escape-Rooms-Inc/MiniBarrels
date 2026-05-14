@@ -12,6 +12,7 @@
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "MiniBarrels"
 
+#define MQTT_TOPIC          "MermaidsTale/MiniBarrels/"
 #define MQTT_TOPIC_COMMAND  "MermaidsTale/MiniBarrels/command"
 #define MQTT_TOPIC_STATUS   "MermaidsTale/MiniBarrels/status"
 #define MQTT_TOPIC_LOG      "MermaidsTale/MiniBarrels/log"
@@ -19,7 +20,7 @@
 #define MQTT_TOPIC_SYSTEM   "MermaidsTale/MiniBarrels/system"
 
 #define MAX_CHAR 20
-#define ID_LEN 13
+#define ID_LEN 12
 #define TAG_LEN 16
 
 #define S1_RFID_RX_PIN  4
@@ -33,10 +34,10 @@
 //================================================
 struct SPICE {
   String spice;
-  byte uid[ID_LEN];
+  char uid[ID_LEN];
 
-  SPICE():spice(""),uid(0,0,0,0,0,0,0,0,0,0,0,0,0){}
-  SPICE(const String& vSpice, byte vUid[]): spice(vSpice){  
+  SPICE():spice(""),uid(0,0,0,0,0,0,0,0,0,0,0,0){}
+  SPICE(const String& vSpice, char vUid[]): spice(vSpice){
     for(byte i = 0; i < ID_LEN; i++)
       uid[i] = vUid[i];
   }
@@ -61,13 +62,19 @@ EspSoftwareSerial::UART rfid5;
 
 
 //Known spices and their IDs
-const SPICE spices[5] = {
-  SPICE("Cinnamon",(byte[]){0,0,0,0,0,0,0,0,0,0,0,0,0}),
-  SPICE("Vanilla",(byte[]){0,0,0,0,0,0,0,0,0,0,0,0,0})
- // SPICE("",{}),
- // SPICE("",{}),
- // SPICE("",{})
-};
+//const SPICE spices[5] = {
+//  SPICE("Vanilla",(char[]){'5','1','0','0','0','A','F','0','9','A','3','1'}),
+//  SPICE("Cloves",(char[]){'0','1','1','2','D','7','B','8','7','1','0','D'}),
+//  SPICE("Molasses",(char[]){'5','1','0','0','0','C','7','4','F','A','D','3'}),
+//  SPICE("Sugar Cane",(char[]){'5','1','0','0','0','D','0','1','5','F','0','2'}),
+//  SPICE("Yeast",(char[]){'0','1','1','2','D','7','B','8','6','A','1','6'})
+//};
+
+const SPICE vanillaSpice = SPICE("Vanilla",(char[]){'5','1','0','0','0','D','9','0','A','F','6','3'});
+const SPICE clovesSpice = SPICE("Cloves",(char[]){'0','1','1','2','D','7','B','8','7','1','0','D'});
+const SPICE molassesSpice = SPICE("Molasses",(char[]){'5','1','0','0','0','C','7','4','F','A','D','3'});
+const SPICE sugarCaneSpice = SPICE("SugarCane",(char[]){'5','1','0','0','0','D','0','1','5','F','0','2'});
+const SPICE yeastSpice = SPICE("Yeast",(char[]){'0','1','1','2','D','7','B','8','6','A','1','6'});
 
 // WiFi credentials
 const char* WIFI_SSID = "AlchemyGuest";
@@ -82,18 +89,17 @@ const unsigned long heartBeatPulse = 5 * 1000UL; //5 sec
 
 unsigned long lastTime = 0;
 
-byte newS1Tag[ID_LEN];
-byte newS2Tag[ID_LEN];
-byte newS3Tag[ID_LEN];
-byte newS4Tag[ID_LEN];
-byte newS5Tag[ID_LEN];
+char vanillaTag[ID_LEN];
+char clovesTag[ID_LEN];
+char molassesTag[ID_LEN];
+char sugarCane[ID_LEN];
+char yeastTag[ID_LEN];
 
-byte correctPlacementCount = 0;
 
 bool puzzleSolved = false;
-
+bool validPlacements[5] = {false, false, false,false, false};
 //================================================
-//            NETWORK & MQTT 
+//            NETWORK & MQTT
 //================================================
 //WIFI NETWORK
 void setupWiFi() {
@@ -217,94 +223,100 @@ void heartBeat(){
 //          GENERAL FUNCTIONS
 //================================================
 
-void mqttUIDLog(byte * newTag,const SPICE & spice, bool isValid){
+void mqttUIDLog(char * newTag,const SPICE & spice, bool isValid){
   String out = "UID: ";
   String topic = String(MQTT_TOPIC_SYSTEM) + "/";
-  
+
   topic += spice.spice;
 
-  for(byte i = 0; i < ID_LEN; i++ )
-    out += String(newTag[i],HEX);
 
+  for(byte i = 0; i < ID_LEN; i++)
+    out += String(spice.uid[i]);
+
+  out += " Scanned: ";
+  for(byte i = 0; i < ID_LEN; i++ )
+    out += String(newTag[i]);
+  
   out += " Valid: ";
-  out += ((isValid) ? "True":"False");
+  out += (isValid) ? "True":"False";
   mqttClient.publish(topic.c_str(),out.c_str());
+  
+  String sTopic = String(MQTT_TOPIC) + spice.spice;
+  mqttClient.publish(sTopic.c_str(),(isValid) ? "True":"False");
 }
 
-bool isAMatchingID(const byte id1[], const byte id2[]) {
+bool isAMatchingID(const char id1[], const char id2[]) {
   for (byte i = 0; i < ID_LEN; i++)
     if (id1[i] != id2[i])
       return false;
   return true;
 }
 
-bool idValidation(byte id[], const SPICE & spice) {
-  return (isAMatchingID(id, spice.uid)) ? true : false;
+bool idValidation(char id[], const SPICE & spice) {
+  return isAMatchingID(id, spice.uid);
 }
 
-void listen(Stream & rSerial, byte * newTag, const SPICE & spice, bool & isValid){
+void listen(Stream & rSerial, char * newTag, const SPICE & spice, byte index){
   int readByte;
   int i = 0;
   bool tag = (rSerial.available() == TAG_LEN) ? true : false;
 
   if(!tag)
     return;
-  
+
   while(rSerial.available()){
     readByte = rSerial.read();
     if (readByte != 2 && readByte!= 13 && readByte != 10 && readByte != 3)
       newTag[i++] = readByte;
   }
-  
-  //verify that the UID is a match
-  isValid = idValidation(newTag,spice);
-  delay(100);
+
+  //verify that the UID is a match and update placement status
+  bool isValid  = idValidation(newTag,spice);
+  validPlacements[index] = isValid;
+  delay(10);
+
+  mqttUIDLog(newTag,spice,isValid);
 }
+
+void clearTag(char * newTag){
+  for(byte i = 0; i < ID_LEN; i++)
+    newTag[i] = 0;
+}
+
 void checkSuccess(){
-  if(correctPlacementCount < 5)
-    return;
+  for(byte i = 0; i < 5; i++)
+    if(!validPlacements[i])
+      return;
+
   puzzleSolved = true;
   mqttClient.publish(MQTT_TOPIC_STATUS,"SOLVED");
+  delay(5000); //10sec delay after winning
 }
+
 void vanillaRFIDRead(){
-  bool isValid; 
-  listen(rfid1,newS1Tag,spices[0],isValid);
-  mqttUIDLog(newS1Tag,spices[0],isValid);
-  correctPlacementCount += (isValid) ? 1 : -1; 
-  checkSuccess();
+  listen(rfid1,vanillaTag,vanillaSpice,0);
+  clearTag(vanillaTag);
 }
-void cinnamonRFIDRead(){
-  bool isValid; 
-  listen(rfid2,newS2Tag,spices[1],isValid);
-  mqttUIDLog(newS2Tag,spices[1],isValid);
-  correctPlacementCount += (isValid) ? 1 : -1; 
-  checkSuccess();
+void clovesRFIDRead(){
+  listen(rfid2,clovesTag,clovesSpice,1);
+  clearTag(clovesTag);
 }
-void spice3RFIDRead(){
-  bool isValid; 
-  listen(rfid3,newS3Tag,spices[2],isValid);
-  mqttUIDLog(newS3Tag,spices[2],isValid);
-  correctPlacementCount += (isValid) ? 1 : -1; 
-  checkSuccess();
+void molassesRFIDRead(){
+  listen(rfid3,molassesTag,molassesSpice,2);
+  clearTag(molassesTag);
 }
-void spice4RFIDReaed(){
-  bool isValid; 
-  listen(rfid4,newS4Tag,spices[3],isValid);
-  mqttUIDLog(newS4Tag,spices[3],isValid);
-  correctPlacementCount += (isValid) ? 1 : -1; 
-  checkSuccess();
+void sugarCaneRFIDRead(){
+  listen(rfid4,sugarCane,sugarCaneSpice,3);
+  clearTag(sugarCane);
 }
-void spice5RFIDRead(){
-  bool isValid; 
-  listen(rfid5,newS5Tag,spices[4],isValid);
-  mqttUIDLog(newS5Tag,spices[4],isValid);
-  correctPlacementCount += (isValid) ? 1 : -1; 
-  checkSuccess();
+void yeastRFIDRead(){
+  listen(rfid5,yeastTag,yeastSpice,4);
+  clearTag(yeastTag);
 }
 
 
 void setupRFID(){
-  Serial.begin(115200);
+  // Serial.begin(115200);
 
   rfid1.begin(9600,SERIAL_8N1,S1_RFID_RX_PIN,-1);
   rfid2.begin(9600,SERIAL_8N1,S2_RFID_RX_PIN,-1);
@@ -328,25 +340,25 @@ void program(){
   }
   mqttClient.loop();
 
-  heartBeat(); 
+  heartBeat();
 
   vanillaRFIDRead();
-  cinnamonRFIDRead();
-  spice3RFIDRead();
-  spice4RFIDReaed();
-  spice5RFIDRead();
+  clovesRFIDRead();
+  molassesRFIDRead();
+  sugarCaneRFIDRead();
+  yeastRFIDRead();
+  checkSuccess();
 }
 
 //================================================
-//               SETUP 
+//               SETUP
 //================================================
 void setup() {
-  Serial.begin(115200);
   _init();
 }
 
 //================================================
-//             MAIN LOOP 
+//             MAIN LOOP
 //================================================
 void loop() {
   program();

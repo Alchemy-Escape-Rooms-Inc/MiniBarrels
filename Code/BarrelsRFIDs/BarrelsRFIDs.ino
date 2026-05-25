@@ -76,6 +76,7 @@ const SPICE molassesSpice = SPICE("Molasses",(char[]){'5','1','0','0','0','C','7
 const SPICE sugarCaneSpice = SPICE("SugarCane",(char[]){'5','1','0','0','0','D','0','1','5','F','0','2'});
 const SPICE yeastSpice = SPICE("Yeast",(char[]){'0','1','1','2','D','7','B','8','6','A','1','6'});
 
+const SPICE spices[5] = {vanillaSpice,clovesSpice,molassesSpice,sugarCaneSpice,yeastSpice}; 
 // WiFi credentials
 const char* WIFI_SSID = "AlchemyGuest";
 const char* WIFI_PASS = "VoodooVacation5601";
@@ -217,6 +218,9 @@ void heartBeat(){
   // Announce we're online
   mqttClient.publish(MQTT_TOPIC_STATUS, "ONLINE");
   mqttLogf("%s v%s online", PROP_NAME, VERSION);
+  String topic = String(MQTT_TOPIC);
+  for(byte i = 0; i < 5; i++)
+    mqttClient.publish(String(topic + spices[i].spice).c_str(),"Clear");
 }
 
 //================================================
@@ -283,6 +287,13 @@ void clearTag(char * newTag){
     newTag[i] = 0;
 }
 
+
+void resetParams(){
+  puzzleSolved = false; 
+  for(byte i = 0; i < 5; i++)
+    validPlacements[i] = false;
+}
+
 void checkSuccess(){
   for(byte i = 0; i < 5; i++)
     if(!validPlacements[i])
@@ -291,6 +302,8 @@ void checkSuccess(){
   puzzleSolved = true;
   mqttClient.publish(MQTT_TOPIC_STATUS,"SOLVED");
   delay(5000); //10sec delay after winning
+  resetParams();
+  delay(5000);
 }
 
 void vanillaRFIDRead(){
@@ -341,6 +354,11 @@ void program(){
   mqttClient.loop();
 
   heartBeat();
+  
+  //once the puzzle has been solved,
+  //do not scan for any new updates
+  if(puzzleSolved)
+    return;
 
   vanillaRFIDRead();
   clovesRFIDRead();

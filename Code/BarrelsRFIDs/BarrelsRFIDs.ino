@@ -73,8 +73,8 @@ EspSoftwareSerial::UART rfid5;
 const SPICE vanillaSpice = SPICE("Vanilla",(char[]){'5','1','0','0','0','D','9','0','A','F','6','3'});
 const SPICE clovesSpice = SPICE("Cloves",(char[]){'0','1','1','2','D','7','B','8','7','1','0','D'});
 const SPICE molassesSpice = SPICE("Molasses",(char[]){'5','1','0','0','0','C','7','4','F','A','D','3'});
-const SPICE sugarCaneSpice = SPICE("SugarCane",(char[]){'5','1','0','0','0','D','0','1','5','F','0','2'});
-const SPICE yeastSpice = SPICE("Yeast",(char[]){'0','1','1','2','D','7','B','8','6','A','1','6'});
+const SPICE sugarCaneSpice = SPICE("SugarCane",(char[]){'0','1','1','2','D','7','B','8','6','6','1','A'});
+const SPICE yeastSpice = SPICE("Yeast",(char[]){'0','1','1','2','D','7','B','8','7','A','0','6'});
 
 const SPICE spices[5] = {vanillaSpice,clovesSpice,molassesSpice,sugarCaneSpice,yeastSpice}; 
 // WiFi credentials
@@ -277,7 +277,7 @@ void listen(Stream & rSerial, char * newTag, const SPICE & spice, byte index){
   //verify that the UID is a match and update placement status
   bool isValid  = idValidation(newTag,spice);
   validPlacements[index] = isValid;
-  delay(10);
+  delay(100);
 
   mqttUIDLog(newTag,spice,isValid);
 }

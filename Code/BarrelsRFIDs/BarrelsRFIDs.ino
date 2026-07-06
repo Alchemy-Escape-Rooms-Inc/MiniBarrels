@@ -28,9 +28,12 @@
 #include <HardwareSerial.h>
 #include <SoftwareSerial.h>
 #include <stdarg.h>
+#include "MANIFEST.h"   // single source of truth: tag IDs, version, topics, config
 
-#define VERSION                "2.6.0"
-#define PROP_NAME              "MiniBarrels"
+// Identity/version/topics/tags all come from MANIFEST.h (single source of
+// truth). These bridge the manifest names onto the names the code already uses.
+#define VERSION                FIRMWARE_VERSION
+#define PROP_NAME              DEVICE_NAME
 #define NUM_SPICES             5
 #define ID_LEN                 12
 #define TOPIC_BUF              48
@@ -39,7 +42,7 @@
 // WatchTower heartbeat standard = 5 minutes (300000ms). The deployed v1.0.0
 // firmware used ~5s here, which spammed the broker and looked like a reboot
 // loop on the wire (online + status + all-Clear re-announced every 5s).
-const unsigned long HEARTBEAT_MS = 300000UL;
+const unsigned long HEARTBEAT_MS = HEARTBEAT_MS_MANIFEST;
 
 // "Clear" fires only after this long with NO bytes at all from the
 // reader (not just "no good frames"). With three SoftwareSerial
@@ -78,7 +81,7 @@ static const char* const STATE_NAMES[] = { "Clear", "False", "True" };
 
 struct Spice {
   const char* name;
-  char        expected[ID_LEN];   // expected UID for "True"
+  const char* expected;           // expected UID for "True" (12 chars, from MANIFEST.h)
   Stream*     port;
   char        topic[TOPIC_BUF];   // precomputed full MQTT topic
 
@@ -100,13 +103,25 @@ HardwareSerial rfid2(1);   // Cloves
 HardwareSerial rfid3(2);   // Molasses
 EspSoftwareSerial::UART rfid4, rfid5;
 
+// Expected tag UIDs come straight from MANIFEST.h. To swap a barrel's tag,
+// edit the matching TAG_* line in MANIFEST.h and re-flash - nothing here changes.
 Spice spices[NUM_SPICES] = {
-  { "Vanilla",   {'5','1','0','0','0','D','9','0','A','F','6','3'}, &rfid1 },
-  { "Cloves",    {'0','1','1','2','D','7','B','8','7','1','0','D'}, &rfid2 },
-  { "Molasses",  {'5','1','0','0','0','C','7','4','F','A','D','3'}, &rfid3 },
-  { "SugarCane", {'0','1','1','2','D','7','B','8','6','6','1','A'}, &rfid4 },
-  { "Yeast",     {'0','1','1','2','D','7','B','8','7','A','0','6'}, &rfid5 },
+  { "Vanilla",   TAG_VANILLA,   &rfid1 },
+  { "Cloves",    TAG_CLOVES,    &rfid2 },
+  { "Molasses",  TAG_MOLASSES,  &rfid3 },
+  { "SugarCane", TAG_SUGARCANE, &rfid4 },
+  { "Yeast",     TAG_YEAST,     &rfid5 },
 };
+
+// Catch a mistyped tag in MANIFEST.h at BUILD time, not in the room. Every
+// TAG_* must be exactly ID_LEN (12) hex chars, or the reader compare (which
+// memcmp's ID_LEN bytes) would read past the string. A wrong length fails
+// the build here with a clear message instead of silently deadening a barrel.
+static_assert(sizeof(TAG_VANILLA)   - 1 == ID_LEN, "TAG_VANILLA must be 12 chars");
+static_assert(sizeof(TAG_CLOVES)    - 1 == ID_LEN, "TAG_CLOVES must be 12 chars");
+static_assert(sizeof(TAG_MOLASSES)  - 1 == ID_LEN, "TAG_MOLASSES must be 12 chars");
+static_assert(sizeof(TAG_SUGARCANE) - 1 == ID_LEN, "TAG_SUGARCANE must be 12 chars");
+static_assert(sizeof(TAG_YEAST)     - 1 == ID_LEN, "TAG_YEAST must be 12 chars");
 
 WiFiClient   espClient;
 PubSubClient mqtt(espClient);

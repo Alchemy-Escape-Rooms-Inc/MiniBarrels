@@ -99,6 +99,7 @@ char yeastTag[ID_LEN];
 
 bool puzzleSolved = false;
 bool validPlacements[5] = {false, false, false,false, false};
+bool alreadyAValidScan[5] = {false,false,false,false,false};
 //================================================
 //            NETWORK & MQTT
 //================================================
@@ -216,7 +217,7 @@ void heartBeat(){
     return;
   lastTime = currentTime;
   // Announce we're online
-  mqttClient.publish(MQTT_TOPIC_STATUS, "ONLINE");
+  mqttClient.publish(MQTT_TOPIC_STATUS, (puzzleSolved) ? "SOLVED" : "ONLINE");
   mqttLogf("%s v%s online", PROP_NAME, VERSION);
   String topic = String(MQTT_TOPIC);
   for(byte i = 0; i < 5; i++)
@@ -261,6 +262,9 @@ bool idValidation(char id[], const SPICE & spice) {
 }
 
 void listen(Stream & rSerial, char * newTag, const SPICE & spice, byte index){
+  //leave if there was already a valid scanned barrel
+  if(alreadyAValidScan[index])
+    return;
   int readByte;
   int i = 0;
   bool tag = (rSerial.available() == TAG_LEN) ? true : false;
@@ -277,6 +281,15 @@ void listen(Stream & rSerial, char * newTag, const SPICE & spice, byte index){
   //verify that the UID is a match and update placement status
   bool isValid  = idValidation(newTag,spice);
   validPlacements[index] = isValid;
+  //if the rfid tag matched, update alreadyAValidScan 
+  //otherwise reset alreadyAValidScan
+  if(isValid){
+    alreadyAValidScan[index] = true;
+  } else {
+    for(int i = 0; i < 5; i++)
+      alreadyAValidScan[index] = false;
+  }
+
   delay(100);
 
   mqttUIDLog(newTag,spice,isValid);

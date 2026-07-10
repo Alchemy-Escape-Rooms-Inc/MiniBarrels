@@ -174,13 +174,18 @@ void connectMQTT() {
 
 // ---- WatchTower command handling ----------------------------------------
 // Report the number of correct barrels as a quick diagnostic state string.
+// Protocol standard: the reply goes back on /command (same as PONG); the
+// echo lands in the unknown-command branch, which is harmless.
 void promptStatus() {
   byte correct = 0;
   for (byte i = 0; i < NUM_SPICES; i++)
     if (spices[i].state == ST_TRUE) correct++;
-  mqttLogf("STATE:%s CORRECT:%u/%u UP%lus",
+  char reply[64];
+  snprintf(reply, sizeof(reply), "%s|%u/%u|UP:%lus|V%s",
            puzzleSolved ? "SOLVED" : "PLAYING",
-           correct, (unsigned)NUM_SPICES, millis() / 1000UL);
+           correct, (unsigned)NUM_SPICES, millis() / 1000UL, VERSION);
+  mqtt.publish(MQTT_TOPIC_COMMAND, reply);
+  mqttLogf("STATUS -> %s", reply);
 }
 
 // Re-publish every barrel's current retained value and the solve state.

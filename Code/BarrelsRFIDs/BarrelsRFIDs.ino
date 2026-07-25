@@ -227,9 +227,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     return;
   }
   if (strcmp(msg, "PUZZLE_RESET") == 0) {
-    // Re-read sensors and re-sync state without rebooting. Force a fresh
-    // publish of every barrel + solve state so M3 is back in sync.
-    for (byte i = 0; i < NUM_SPICES; i++) spices[i].published = false;
+    // Re-sync M3 without rebooting: republish every barrel's current state
+    // and let checkSolved() recompute from live sensors. Clearing lastUid
+    // makes the next frame re-classify the tag; hasTag stays set so removal
+    // detection still works. (Clearing `published` here would force retained
+    // Clear and deaden any barrel already sitting on its reader.)
+    for (byte i = 0; i < NUM_SPICES; i++) memset(spices[i].lastUid, 0, ID_LEN);
     puzzleSolved = false;
     republishAll();
     mqtt.publish(MQTT_TOPIC_COMMAND, "OK");

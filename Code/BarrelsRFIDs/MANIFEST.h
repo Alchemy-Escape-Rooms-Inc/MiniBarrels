@@ -11,7 +11,7 @@
 #pragma once
 
 #define DEVICE_NAME           "MiniBarrels"
-#define FIRMWARE_VERSION      "2.7.0"
+#define FIRMWARE_VERSION      "2.7.1"
 #define BOARD_TYPE            "ESP32-S3"
 #define ROOM                  "MermaidsTale"
 #define DESCRIPTION           "Five RFID barrel readers. Each reader publishes True/False/Clear (retained) for its spice; when all five correct barrels are present the board publishes status=SOLVED, which drives the M3 barrel-piston finale."

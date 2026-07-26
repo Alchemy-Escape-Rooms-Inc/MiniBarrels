@@ -33,13 +33,14 @@
 // Barrel RFID Tag IDs  (the correct/expected UID for each barrel)
 // 12 hex chars each, exactly as the reader reports on the wire.
 // EDIT HERE to swap a tag, then re-flash. The .ino reads these directly.
-// Yeast UID confirmed against WatchTower wire log (1194 live scans).
+// Yeast UID captured off WatchTower wire log 2026-07-26 14:06 (new tag,
+// replaced the original 0112D7B87A06).
 // ------------------------------------------------------------
 #define TAG_VANILLA           "51000D90AF63"
 #define TAG_CLOVES            "0112D7B8710D"
 #define TAG_MOLASSES          "51000C74FAD3"
 #define TAG_SUGARCANE         "0112D7B8661A"
-#define TAG_YEAST             "0112D7B87A06"
+#define TAG_YEAST             "0112D7BB8CF3"
 
 // Hardware — RFID reader RX pins (one UART per barrel)
 #define PIN_CONFIG            "VANILLA_RX=4 (UART0), CLOVES_RX=5 (UART1), MOLASSES_RX=6 (UART2), SUGARCANE_RX=7 (SoftSerial), YEAST_RX=15 (SoftSerial)"

@@ -44,19 +44,12 @@
 // loop on the wire (online + status + all-Clear re-announced every 5s).
 const unsigned long HEARTBEAT_MS = HEARTBEAT_MS_MANIFEST;
 
-// "Clear" fires only after this long with NO bytes at all from the
-// reader (not just "no good frames"). With three SoftwareSerial
-// streams sharing the CPU it is normal for the occasional frame to
-// be corrupted; bytes still arrive and the tag is still present.
-// 2026-07-27 (v2.7.2): 2000 -> 20000. The live board proved these readers
-// do NOT stream while a tag sits in the field — they re-report a seated
-// tag only every ~4-10s (wire log 07-26 18:50-18:59: every True was
-// followed by Clear at exactly +2.000s, then True again on the next
-// re-poll; all five barrels flapped and the all-True solve window never
-// existed). 20s = 2x margin over the worst observed re-poll gap. Cost:
-// a lifted barrel reads empty after up to 20s — fine for this puzzle,
-// since a swapped-on tag still classifies True/False instantly.
-const unsigned long REMOVAL_TIMEOUT_MS = 20000UL;
+// v2.8.0: silence-based removal REMOVED entirely (with it, the
+// REMOVAL_TIMEOUT_MS constant). History: v2.7.1 shipped 2s, flapping every
+// seated barrel True->Clear between reader re-polls; v2.7.2 tried 20s and
+// still mis-fired because a hands-off seated tag can go ~96s between
+// re-reports. There is no safe timeout - states latch instead (see scan()
+// and the PUZZLE_RESET handler).
 
 // Frame markers from the serial RFID modules
 static const byte STX = 0x02;
@@ -235,16 +228,19 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     return;
   }
   if (strcmp(msg, "PUZZLE_RESET") == 0) {
-    // Re-sync M3 without rebooting: republish every barrel's current state
-    // and let checkSolved() recompute from live sensors. Clearing lastUid
-    // makes the next frame re-classify the tag; hasTag stays set so removal
-    // detection still works. (Clearing `published` here would force retained
-    // Clear and deaden any barrel already sitting on its reader.)
-    for (byte i = 0; i < NUM_SPICES; i++) memset(spices[i].lastUid, 0, ID_LEN);
+    // v2.8.0 (latched states): the reset IS the only Clear path now, so
+    // wipe every reader to Clear and drop the latches. A barrel still
+    // sitting on a reader re-Trues on that reader's next re-poll (readers
+    // re-report seated tags erratically, 4s-2min) - fine between games,
+    // when staff strike the barrels anyway.
+    for (byte i = 0; i < NUM_SPICES; i++) {
+      spices[i].hasTag = false;
+      memset(spices[i].lastUid, 0, ID_LEN);
+      setState(spices[i], ST_CLEAR);
+    }
     puzzleSolved = false;
-    republishAll();
     mqtt.publish(MQTT_TOPIC_COMMAND, "OK");
-    Serial.println("[MQTT] PUZZLE_RESET -> re-synced");
+    Serial.println("[MQTT] PUZZLE_RESET -> all readers cleared (latched-state design)");
     return;
   }
   Serial.printf("[MQTT] unknown command: %s\n", msg);
@@ -322,15 +318,14 @@ void scan(Spice& s) {
     }
   }
 
-  // Reader has gone TOTALLY silent (no bytes at all) -> barrel was lifted.
-  // Garbled frames during heavy WiFi/SoftwareSerial contention no longer
-  // count as "removal" - any byte resets lastByteMs above.
-  if (s.hasTag && s.lastByteMs != 0 &&
-      (millis() - s.lastByteMs) > REMOVAL_TIMEOUT_MS) {
-    s.hasTag = false;
-    memset(s.lastUid, 0, ID_LEN);
-    setState(s, ST_CLEAR);
-  }
+  // v2.8.0: NO silence-based removal. Hands-off wire test 2026-07-27
+  // (Vanilla seated, untouched): reader re-poll gaps ranged 4s to ~96s,
+  // so ANY silence timeout eventually mis-fires Clear on a seated barrel
+  // (2s did it every re-poll; 20s did it on the long gaps). States are
+  // LATCHED instead: a read holds until a different tag lands on that
+  // reader or PUZZLE_RESET wipes the board. An empty reader may keep its
+  // last state until reset - guests place-and-leave, staff strike the
+  // barrels between games, so nothing observable changes in play.
 
   // First time through -> publish Clear once so the retained value exists
   if (!s.published) {

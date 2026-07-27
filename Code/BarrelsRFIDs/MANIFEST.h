@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // MANIFEST.h â€” WatchTower Device Manifest
 // This file is parsed by sync_manifests.py for the WatchTower dashboard.
 // Keep all values as #define strings unless noted otherwise.
@@ -11,10 +11,10 @@
 #pragma once
 
 #define DEVICE_NAME           "MiniBarrels"
-#define FIRMWARE_VERSION      "2.8.0"
+#define FIRMWARE_VERSION      "2.9.0"
 #define BOARD_TYPE            "ESP32-S3"
 #define ROOM                  "MermaidsTale"
-#define DESCRIPTION           "Five RFID barrel readers. Each reader publishes True/False/Clear (retained) for its spice; when all five correct barrels are present the board publishes status=SOLVED, which drives the M3 barrel-piston finale."
+#define DESCRIPTION           "Five RFID barrel readers, two-layer publish: public MermaidsTale/MiniBarrels/<Spice> gets a 2s True/False PULSE per placement (drives M3 per-barrel SFX latch machine, Clear re-arms it); retained .../system/<Spice> holds the REAL seated state. Solve is computed from the private seated state; all five correct -> status=SOLVED -> M3 barrel-piston finale."
 
 #define BUILD_STATUS          "stable"
 #define CODE_HEALTH           "good"
@@ -26,7 +26,7 @@
 #define HEARTBEAT_MS_MANIFEST 300000
 
 #define SUBSCRIBE_TOPICS      "MermaidsTale/MiniBarrels/command"
-#define PUBLISH_TOPICS        "MermaidsTale/MiniBarrels/status, MermaidsTale/MiniBarrels/log, MermaidsTale/MiniBarrels/{Vanilla|Cloves|Molasses|SugarCane|Yeast}"
+#define PUBLISH_TOPICS        "MermaidsTale/MiniBarrels/status, MermaidsTale/MiniBarrels/log, MermaidsTale/MiniBarrels/{Vanilla|Cloves|Molasses|SugarCane|Yeast} (2s pulses), MermaidsTale/MiniBarrels/system/{Vanilla|Cloves|Molasses|SugarCane|Yeast} (retained real state)"
 #define SUPPORTED_COMMANDS    "PING, STATUS, RESET, PUZZLE_RESET"
 
 // ------------------------------------------------------------
@@ -45,6 +45,6 @@
 // Hardware â€” RFID reader RX pins (one UART per barrel)
 #define PIN_CONFIG            "VANILLA_RX=4 (UART0), CLOVES_RX=5 (UART1), MOLASSES_RX=6 (UART2), SUGARCANE_RX=7 (SoftSerial), YEAST_RX=15 (SoftSerial)"
 #define COMPONENTS            "5x serial RFID readers (STX/ETX framed, 9600 baud). Vanilla/Cloves/Molasses on hardware UARTs, SugarCane/Yeast on SoftwareSerial."
-#define KNOWN_QUIRKS          "Vanilla on UART0 requires 'USB CDC On Boot = Enabled' so Serial does not steal UART0. Clear fires only after REMOVAL_TIMEOUT_MS (2000ms) of TOTAL reader silence, so garbled frames during WiFi/SoftSerial contention do not false-trigger removal. Tag IDs live in MANIFEST.h - edit there, not in the .ino."
+#define KNOWN_QUIRKS          "MUST be built with 'USB CDC On Boot = Enabled' (CDCOnBoot=cdc) or Serial steals UART0 and kills the Vanilla reader. Readers re-report seated tags erratically (4s-2min) and go silent in between - NEVER add silence-based removal (v2.7.1/v2.7.2 flap bug); seated state clears only via different-tag or PUZZLE_RESET. <Spice>Latch topics on the wire belong to M3 (SFX bookkeeping), never publish to them. Tag IDs live in MANIFEST.h - edit there, not in the .ino."
 
 #define REPO_URL              "https://github.com/Alchemy-Escape-Rooms-Inc/MiniBarrels"

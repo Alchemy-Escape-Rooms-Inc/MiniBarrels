@@ -44,12 +44,21 @@
 // loop on the wire (online + status + all-Clear re-announced every 5s).
 const unsigned long HEARTBEAT_MS = HEARTBEAT_MS_MANIFEST;
 
-// v2.8.0: silence-based removal REMOVED entirely (with it, the
-// REMOVAL_TIMEOUT_MS constant). History: v2.7.1 shipped 2s, flapping every
-// seated barrel True->Clear between reader re-polls; v2.7.2 tried 20s and
-// still mis-fired because a hands-off seated tag can go ~96s between
-// re-reports. There is no safe timeout - states latch instead (see scan()
-// and the PUZZLE_RESET handler).
+// v2.9.0 TWO-LAYER DESIGN (restores the ORIGINAL room behavior, user 07-27):
+//   WIRE  (MermaidsTale/MiniBarrels/<Spice>): a 2s PULSE per placement -
+//     True (or False) the moment a NEW tag lands, Clear 2s later. M3's
+//     per-spice sound-effect machine needs exactly this: it plays the SFX
+//     on True while its own <Spice>Latch topic reads "ready", then needs
+//     the Clear to re-arm the latch for the next barrel. (The <Spice>Latch
+//     topics belong to M3 - this firmware NEVER publishes to them.)
+//   BOARD (spice.seated + .../system/<Spice> retained): the private memory
+//     of what is actually on each reader. Drives checkSolved()/SOLVED and
+//     is immune to the pulse. Cleared only by a different tag landing or
+//     PUZZLE_RESET.
+// Why no silence-based removal (v2.7.1 2s / v2.7.2 20s both failed): a
+// hands-off seated tag can go ~96s between reader re-reports, so every
+// timeout eventually mis-fires; the solve must not depend on wire state.
+const unsigned long PULSE_MS = 2000UL;   // wire pulse width (matches original room feel)
 
 // Frame markers from the serial RFID modules
 static const byte STX = 0x02;
@@ -84,7 +93,8 @@ struct Spice {
   const char* name;
   const char* expected;           // expected UID for "True" (12 chars, from MANIFEST.h)
   Stream*     port;
-  char        topic[TOPIC_BUF];   // precomputed full MQTT topic
+  char        topic[TOPIC_BUF];   // pulse topic (MermaidsTale/MiniBarrels/<Spice>)
+  char        sysTopic[TOPIC_BUF];// real-state topic (.../system/<Spice>, retained)
 
   // runtime
   char          rx[ID_LEN];       // accumulating frame buffer
@@ -92,8 +102,14 @@ struct Spice {
   unsigned long lastByteMs;       // ANY byte from this reader resets this
   bool          hasTag;           // tracking a UID right now
   char          lastUid[ID_LEN];
-  SpiceState    state;            // last PUBLISHED state
-  bool          published;        // we have published at least once
+  SpiceState    seated;           // the board's PRIVATE memory of what is on
+                                  // this reader (drives the solve; survives
+                                  // the wire pulse going back to Clear).
+                                  // NO relation to M3's <Spice>Latch topics -
+                                  // those are M3's own sound-effect bookkeeping
+                                  // and this firmware never touches them.
+  unsigned long pulseClearAtMs;   // when to send the pulse's trailing Clear (0 = none)
+  bool          published;        // baseline Clear has been published once
 };
 
 // Vanilla on UART0 requires "USB CDC On Boot = Enabled" so Serial
@@ -180,7 +196,7 @@ void connectMQTT() {
 void promptStatus() {
   byte correct = 0;
   for (byte i = 0; i < NUM_SPICES; i++)
-    if (spices[i].state == ST_TRUE) correct++;
+    if (spices[i].seated == ST_TRUE) correct++;
   char reply[64];
   snprintf(reply, sizeof(reply), "%s|%u/%u|UP:%lus|V%s",
            puzzleSolved ? "SOLVED" : "PLAYING",
@@ -189,11 +205,12 @@ void promptStatus() {
   mqttLogf("STATUS -> %s", reply);
 }
 
-// Re-publish every barrel's current retained value and the solve state.
-// Used by PUZZLE_RESET so M3 re-syncs without the board rebooting.
+// Re-publish the private (system) layer and the solve state so watchers
+// re-sync without the board rebooting. Public spice topics are pulse-only
+// and are NOT replayed here (a replayed True would fire a phantom sound).
 void republishAll() {
   for (byte i = 0; i < NUM_SPICES; i++)
-    mqtt.publish(spices[i].topic, STATE_NAMES[spices[i].state], true);
+    mqtt.publish(spices[i].sysTopic, STATE_NAMES[spices[i].seated], true);
   mqtt.publish(MQTT_TOPIC_STATUS, puzzleSolved ? "SOLVED" : "ONLINE", true);
 }
 
@@ -228,19 +245,22 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     return;
   }
   if (strcmp(msg, "PUZZLE_RESET") == 0) {
-    // v2.8.0 (latched states): the reset IS the only Clear path now, so
-    // wipe every reader to Clear and drop the latches. A barrel still
-    // sitting on a reader re-Trues on that reader's next re-poll (readers
-    // re-report seated tags erratically, 4s-2min) - fine between games,
-    // when staff strike the barrels anyway.
+    // v2.9.0: the reset is the only path that empties the private memory.
+    // Wipe both layers to Clear and cancel any in-flight pulses. A barrel
+    // left seated re-announces on its next reader re-poll (4s-2min) and
+    // simply counts again - fine between games, when staff strike the
+    // barrels anyway.
     for (byte i = 0; i < NUM_SPICES; i++) {
-      spices[i].hasTag = false;
+      spices[i].hasTag        = false;
+      spices[i].pulseClearAtMs = 0;
       memset(spices[i].lastUid, 0, ID_LEN);
-      setState(spices[i], ST_CLEAR);
+      setSeated(spices[i], ST_CLEAR);
+      mqtt.publish(spices[i].topic, STATE_NAMES[ST_CLEAR], true);
     }
     puzzleSolved = false;
+    mqtt.publish(MQTT_TOPIC_STATUS, "ONLINE", true);
     mqtt.publish(MQTT_TOPIC_COMMAND, "OK");
-    Serial.println("[MQTT] PUZZLE_RESET -> all readers cleared (latched-state design)");
+    Serial.println("[MQTT] PUZZLE_RESET -> both layers cleared");
     return;
   }
   Serial.printf("[MQTT] unknown command: %s\n", msg);
@@ -251,7 +271,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 void checkSolved() {
   bool allTrue = true;
   for (byte i = 0; i < NUM_SPICES; i++)
-    if (spices[i].state != ST_TRUE) { allTrue = false; break; }
+    if (spices[i].seated != ST_TRUE) { allTrue = false; break; }
 
   if (allTrue && !puzzleSolved) {
     puzzleSolved = true;
@@ -278,14 +298,39 @@ void heartBeat() {
 //            Sensor state machine
 //================================================
 
-// Edge-triggered: publishes only if newState is different from the
-// last state we published for this spice (or this is the first publish).
-void setState(Spice& s, SpiceState newState) {
-  if (s.published && s.state == newState) return;
-  s.state     = newState;
-  s.published = true;
-  mqtt.publish(s.topic, STATE_NAMES[newState], true);   // retained
-  Serial.printf("[%s] %s\n", s.name, STATE_NAMES[newState]);
+// Update the board's private memory for one reader and mirror it to the
+// retained .../system/<Spice> topic (the "real list" - what is actually
+// seated right now, for WatchTower/diagnostics and anyone watching MQTT).
+void setSeated(Spice& s, SpiceState newState) {
+  if (s.seated == newState) return;
+  s.seated = newState;
+  mqtt.publish(s.sysTopic, STATE_NAMES[newState], true);   // retained truth
+  Serial.printf("[%s] seated=%s\n", s.name, STATE_NAMES[newState]);
+}
+
+// Fire a 2s wire pulse on the public spice topic: True/False now,
+// Clear scheduled PULSE_MS later (serviced in loop by servicePulses).
+// This is purely for M3's per-placement sound effects.
+void firePulse(Spice& s, SpiceState st) {
+  mqtt.publish(s.topic, STATE_NAMES[st], false);   // not retained - a pulse, not a state
+  s.pulseClearAtMs = millis() + PULSE_MS;
+  if (s.pulseClearAtMs == 0) s.pulseClearAtMs = 1;  // 0 means "no pulse pending"
+  Serial.printf("[%s] pulse %s\n", s.name, STATE_NAMES[st]);
+}
+
+// Send the trailing Clear of any elapsed pulse (retained - Clear is the
+// resting value on the public topic, so M3's latch re-arms and a replayed
+// retained True can never re-fire a sound after a broker/M3 restart).
+void servicePulses() {
+  unsigned long now = millis();
+  for (byte i = 0; i < NUM_SPICES; i++) {
+    Spice& s = spices[i];
+    if (s.pulseClearAtMs != 0 && (long)(now - s.pulseClearAtMs) >= 0) {
+      s.pulseClearAtMs = 0;
+      mqtt.publish(s.topic, STATE_NAMES[ST_CLEAR], true);
+      Serial.printf("[%s] pulse Clear\n", s.name);
+    }
+  }
 }
 
 // Drain one reader. On every complete frame, classify the UID as
@@ -302,12 +347,17 @@ void scan(Spice& s) {
     if (b == STX) { s.rxLen = 0; continue; }
     if (b == ETX) {
       if (s.rxLen == ID_LEN) {
+        // sameTag = a reader RE-REPORT of the tag we already know about
+        // (readers re-announce seated tags erratically, 4s-2min apart).
+        // Re-reports are ignored: no new pulse (no sound spam), no
+        // change to the private memory. A DIFFERENT tag = a real event.
         bool sameTag = s.hasTag && memcmp(s.rx, s.lastUid, ID_LEN) == 0;
         if (!sameTag) {
           memcpy(s.lastUid, s.rx, ID_LEN);
           s.hasTag = true;
           bool ok = memcmp(s.rx, s.expected, ID_LEN) == 0;
-          setState(s, ok ? ST_TRUE : ST_FALSE);
+          setSeated(s, ok ? ST_TRUE : ST_FALSE);   // private memory -> solve
+          firePulse(s, ok ? ST_TRUE : ST_FALSE);   // 2s wire pulse -> M3 sound
         }
       }
       s.rxLen = 0;
@@ -318,18 +368,12 @@ void scan(Spice& s) {
     }
   }
 
-  // v2.8.0: NO silence-based removal. Hands-off wire test 2026-07-27
-  // (Vanilla seated, untouched): reader re-poll gaps ranged 4s to ~96s,
-  // so ANY silence timeout eventually mis-fires Clear on a seated barrel
-  // (2s did it every re-poll; 20s did it on the long gaps). States are
-  // LATCHED instead: a read holds until a different tag lands on that
-  // reader or PUZZLE_RESET wipes the board. An empty reader may keep its
-  // last state until reset - guests place-and-leave, staff strike the
-  // barrels between games, so nothing observable changes in play.
-
-  // First time through -> publish Clear once so the retained value exists
+  // First time through -> publish the Clear baseline on both layers so
+  // retained values exist on every topic.
   if (!s.published) {
-    setState(s, ST_CLEAR);
+    s.published = true;
+    mqtt.publish(s.topic, STATE_NAMES[ST_CLEAR], true);
+    mqtt.publish(s.sysTopic, STATE_NAMES[ST_CLEAR], true);
   }
 }
 
@@ -344,12 +388,14 @@ void setupRFID() {
   rfid5.begin(9600, SWSERIAL_8N1, S5_RX, -1);
 
   for (byte i = 0; i < NUM_SPICES; i++) {
-    snprintf(spices[i].topic, TOPIC_BUF, "%s%s", TOPIC_BASE, spices[i].name);
-    spices[i].rxLen        = 0;
-    spices[i].lastByteMs   = 0;
-    spices[i].hasTag       = false;
-    spices[i].state        = ST_CLEAR;
-    spices[i].published    = false;
+    snprintf(spices[i].topic,    TOPIC_BUF, "%s%s",       TOPIC_BASE, spices[i].name);
+    snprintf(spices[i].sysTopic, TOPIC_BUF, "%ssystem/%s", TOPIC_BASE, spices[i].name);
+    spices[i].rxLen          = 0;
+    spices[i].lastByteMs     = 0;
+    spices[i].hasTag         = false;
+    spices[i].seated         = ST_CLEAR;
+    spices[i].pulseClearAtMs = 0;
+    spices[i].published      = false;
     memset(spices[i].lastUid, 0, ID_LEN);
   }
 }
@@ -369,6 +415,7 @@ void loop() {
   if (!mqtt.connected()) connectMQTT();
   mqtt.loop();
   for (byte i = 0; i < NUM_SPICES; i++) scan(spices[i]);
+  servicePulses();
   checkSolved();
   heartBeat();
 }

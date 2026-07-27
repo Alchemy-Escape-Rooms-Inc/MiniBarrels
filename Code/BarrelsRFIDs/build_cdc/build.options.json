@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "..\\..",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "",
+  "fqbn": "esp32:esp32:esp32s3:CDCOnBoot=cdc",
+  "hardwareFolders": "C:\\Users\\Alchemy\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.10,C:\\Users\\Alchemy\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.10",
+  "otherLibrariesFolders": "C:\\Users\\Alchemy\\Desktop\\One Drive_JClifford\\OneDrive\\Documents\\Arduino\\libraries",
+  "sketchLocation": "C:\\Users\\Alchemy\\repos\\MiniBarrels\\Code\\BarrelsRFIDs"
+}

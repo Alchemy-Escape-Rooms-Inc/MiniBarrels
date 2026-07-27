@@ -1,5 +1,5 @@
-// ============================================================
-// MANIFEST.h — WatchTower Device Manifest
+﻿// ============================================================
+// MANIFEST.h â€” WatchTower Device Manifest
 // This file is parsed by sync_manifests.py for the WatchTower dashboard.
 // Keep all values as #define strings unless noted otherwise.
 //
@@ -11,7 +11,7 @@
 #pragma once
 
 #define DEVICE_NAME           "MiniBarrels"
-#define FIRMWARE_VERSION      "2.7.1"
+#define FIRMWARE_VERSION      "2.7.2"
 #define BOARD_TYPE            "ESP32-S3"
 #define ROOM                  "MermaidsTale"
 #define DESCRIPTION           "Five RFID barrel readers. Each reader publishes True/False/Clear (retained) for its spice; when all five correct barrels are present the board publishes status=SOLVED, which drives the M3 barrel-piston finale."
@@ -42,7 +42,7 @@
 #define TAG_SUGARCANE         "0112D7B8661A"
 #define TAG_YEAST             "0112D7BB8CF3"
 
-// Hardware — RFID reader RX pins (one UART per barrel)
+// Hardware â€” RFID reader RX pins (one UART per barrel)
 #define PIN_CONFIG            "VANILLA_RX=4 (UART0), CLOVES_RX=5 (UART1), MOLASSES_RX=6 (UART2), SUGARCANE_RX=7 (SoftSerial), YEAST_RX=15 (SoftSerial)"
 #define COMPONENTS            "5x serial RFID readers (STX/ETX framed, 9600 baud). Vanilla/Cloves/Molasses on hardware UARTs, SugarCane/Yeast on SoftwareSerial."
 #define KNOWN_QUIRKS          "Vanilla on UART0 requires 'USB CDC On Boot = Enabled' so Serial does not steal UART0. Clear fires only after REMOVAL_TIMEOUT_MS (2000ms) of TOTAL reader silence, so garbled frames during WiFi/SoftSerial contention do not false-trigger removal. Tag IDs live in MANIFEST.h - edit there, not in the .ino."

@@ -48,7 +48,15 @@ const unsigned long HEARTBEAT_MS = HEARTBEAT_MS_MANIFEST;
 // reader (not just "no good frames"). With three SoftwareSerial
 // streams sharing the CPU it is normal for the occasional frame to
 // be corrupted; bytes still arrive and the tag is still present.
-const unsigned long REMOVAL_TIMEOUT_MS = 2000UL;
+// 2026-07-27 (v2.7.2): 2000 -> 20000. The live board proved these readers
+// do NOT stream while a tag sits in the field — they re-report a seated
+// tag only every ~4-10s (wire log 07-26 18:50-18:59: every True was
+// followed by Clear at exactly +2.000s, then True again on the next
+// re-poll; all five barrels flapped and the all-True solve window never
+// existed). 20s = 2x margin over the worst observed re-poll gap. Cost:
+// a lifted barrel reads empty after up to 20s — fine for this puzzle,
+// since a swapped-on tag still classifies True/False instantly.
+const unsigned long REMOVAL_TIMEOUT_MS = 20000UL;
 
 // Frame markers from the serial RFID modules
 static const byte STX = 0x02;

@@ -1,5 +1,5 @@
 // ============================================================
-// MANIFEST.h â€” WatchTower Device Manifest
+// MANIFEST.h Ã¢â‚¬â€ WatchTower Device Manifest
 // This file is parsed by sync_manifests.py for the WatchTower dashboard.
 // Keep all values as #define strings unless noted otherwise.
 //
@@ -11,7 +11,7 @@
 #pragma once
 
 #define DEVICE_NAME           "MiniBarrels"
-#define FIRMWARE_VERSION      "2.9.0"
+#define FIRMWARE_VERSION      "3.0.0"
 #define BOARD_TYPE            "ESP32-S3"
 #define ROOM                  "MermaidsTale"
 #define DESCRIPTION           "Five RFID barrel readers, two-layer publish: public MermaidsTale/MiniBarrels/<Spice> gets a 2s True/False PULSE per placement (drives M3 per-barrel SFX latch machine, Clear re-arms it); retained .../system/<Spice> holds the REAL seated state. Solve is computed from the private seated state; all five correct -> status=SOLVED -> M3 barrel-piston finale."
@@ -42,9 +42,9 @@
 #define TAG_SUGARCANE         "0112D7B8661A"
 #define TAG_YEAST             "0112D7BB8CF3"
 
-// Hardware â€” RFID reader RX pins (one UART per barrel)
+// Hardware Ã¢â‚¬â€ RFID reader RX pins (one UART per barrel)
 #define PIN_CONFIG            "VANILLA_RX=4 (UART0), CLOVES_RX=5 (UART1), MOLASSES_RX=6 (UART2), SUGARCANE_RX=7 (SoftSerial), YEAST_RX=15 (SoftSerial)"
 #define COMPONENTS            "5x serial RFID readers (STX/ETX framed, 9600 baud). Vanilla/Cloves/Molasses on hardware UARTs, SugarCane/Yeast on SoftwareSerial."
-#define KNOWN_QUIRKS          "MUST be built with 'USB CDC On Boot = Enabled' (CDCOnBoot=cdc) or Serial steals UART0 and kills the Vanilla reader. Readers re-report seated tags erratically (4s-2min) and go silent in between - NEVER add silence-based removal (v2.7.1/v2.7.2 flap bug); seated state clears only via different-tag or PUZZLE_RESET. <Spice>Latch topics on the wire belong to M3 (SFX bookkeeping), never publish to them. Tag IDs live in MANIFEST.h - edit there, not in the .ino."
+#define KNOWN_QUIRKS          "MUST be built with 'USB CDC On Boot = Enabled' (CDCOnBoot=cdc) or Serial steals UART0 and kills the Vanilla reader. Readers re-report seated tags erratically (4s-2min) and go silent in between - NEVER add silence-based removal (v2.7.1/v2.7.2 flap bug); seated state clears only via different-tag or PUZZLE_RESET. <Spice>Latch topics on the wire belong to M3 (SFX bookkeeping), never publish to them. Tag IDs live in MANIFEST.h - edit there, not in the .ino. v3.0.0 hardening: LWT retained OFFLINE on /status, 30s task WDT, 2min offline self-reboot, non-blocking MQTT retry w/ full retained re-sync on reconnect; heartbeat = fleet-standard HEARTBEAT:STATE:UPxs:RSSIx (non-retained; retained /status resting value stays ONLINE/SOLVED for the M3 solve condition)."
 
 #define REPO_URL              "https://github.com/Alchemy-Escape-Rooms-Inc/MiniBarrels"

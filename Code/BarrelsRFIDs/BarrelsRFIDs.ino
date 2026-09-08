@@ -1,43 +1,61 @@
 //================================================
-//  A Mermaid's Tale - Mini Barrels (v3.0.0)
+//  A Mermaid's Tale - Mini Barrels (v3.1.0)
 //  Target board: ESP32-S3 (UART0 + UART1 + UART2 + 2x SoftwareSerial)
 //  BUILD REQUIREMENT: "USB CDC On Boot = Enabled" (CDCOnBoot=cdc) or
 //  Serial steals UART0 and kills the Vanilla reader.
 //
-//  Five barrels, five serial RFID readers, TWO publish layers:
+//  Five barrels, five serial RFID readers, one WS2811 light string.
 //
+//  THE TWIST (v3.1.0): a barrel only COUNTS as correct when BOTH
+//    (a) the right RFID tag is sitting on its reader, and
+//    (b) the Balancing Scale has reported that spice weighed correctly
+//        (MermaidsTale/BalancingScale/<Spice> = "true", sent once by the
+//        scale on the transition - see Balancing-Scale printSuccessToMQTT).
+//  Either order works: weigh first then place, or place first then weigh.
+//
+//  FEEDBACK LIGHTS: LEDS_PER_BARREL bullets per barrel on one string.
+//    off    = empty, wrong barrel, or right barrel not yet weighed
+//    YELLOW = that barrel counts as correct
+//    GREEN  = all five correct (puzzle solved)
+//
+//  Publish layers:
 //  1) PULSE layer - MermaidsTale/MiniBarrels/<Spice>
-//     A 2s pulse per placement: "True" (correct barrel) or "False"
-//     (wrong barrel) the moment a NEW tag lands, then "Clear" 2s
-//     later. This drives M3's per-barrel sound effects: M3 plays the
-//     SFX on True while its own <Spice>Latch topic reads "ready",
-//     and needs the Clear to re-arm that latch for the next barrel.
-//     (The <Spice>Latch topics belong to M3 - never published here.)
+//     A 2s pulse per placement: "True" (counts as correct) or "False"
+//     (wrong barrel, or right barrel not yet weighed), then "Clear" 2s
+//     later. Drives M3's per-barrel SFX; M3 needs the Clear to re-arm its
+//     own <Spice>Latch (those Latch topics belong to M3 - never published
+//     here). When a weigh-in arrives for a barrel already seated right,
+//     a True pulse fires at that moment (the moment it registers).
 //
 //  2) SEATED layer - MermaidsTale/MiniBarrels/system/<Spice> (retained)
-//     The board's real memory of what is on each reader. Drives
-//     checkSolved(): all five True -> status=SOLVED (M3 fires the
-//     barrel-piston finale). Cleared only by a different tag landing
-//     on the reader or by PUZZLE_RESET - NEVER by reader silence,
-//     because these readers re-report a seated tag erratically
-//     (4s to ~2min apart; v2.7.x tried silence timeouts and flapped).
+//     Real state per reader: Clear | False | Unweighed | True.
+//     "Unweighed" = right tag, scale hasn't credited it yet. The AI
+//     character reacts only to true/false, so its praise line lands when
+//     the barrel actually registers. checkSolved(): all five True ->
+//     status=SOLVED (M3 fires the barrel-piston finale). Seated memory
+//     clears only on a different tag or PUZZLE_RESET - NEVER on reader
+//     silence (readers re-report a seated tag erratically, 4s to ~2min).
+//
+//  3) WEIGH layer - MermaidsTale/MiniBarrels/system/weighed/<Spice>
+//     (retained true|false). The scale's credit is non-retained and the
+//     scale never sends "false", so this board keeps its own retained
+//     mirror and re-reads it on boot: a mid-game reboot keeps the credits.
+//     Credits clear on PUZZLE_RESET to this board OR to the scale (M3's
+//     game reset sends the scale one).
 //
 //  Hardening (v3.0.0, mirrors SunDial Bridge 4.3.0):
-//    - MQTT LWT: broker publishes retained OFFLINE to /status if the
-//      connection dies, so WatchTower sees a silent death.
-//    - 30s task watchdog reboots the chip if loop() ever stalls.
-//    - 2min offline self-reboot if the broker stays unreachable.
-//    - Non-blocking MQTT retry: readers keep scanning during outages;
-//      republishAll() re-syncs the retained layer on every reconnect.
+//    - MQTT LWT retained OFFLINE on /status, 30s task WDT, 2min offline
+//      self-reboot, non-blocking MQTT retry, republishAll() on reconnect.
 //================================================
 
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <HardwareSerial.h>
 #include <SoftwareSerial.h>
+#include <FastLED.h>
 #include <esp_task_wdt.h>
 #include <stdarg.h>
-#include "MANIFEST.h"   // single source of truth: tag IDs, version, broker, config
+#include "MANIFEST.h"   // single source of truth: tag IDs, version, broker, pins, lights
 
 // Identity/version come from MANIFEST.h; these bridge the manifest names
 // onto the names the code uses.
@@ -45,7 +63,7 @@
 #define PROP_NAME              DEVICE_NAME
 #define NUM_SPICES             5
 #define ID_LEN                 12
-#define TOPIC_BUF              48
+#define TOPIC_BUF              64
 #define DEBUG_RFID             0      // 1 = log every raw byte to USB serial
 
 // WatchTower heartbeat standard = 5 minutes (from MANIFEST.h).
@@ -73,6 +91,14 @@ static const unsigned long RFID_BAUD = 9600;
 #define S4_RX   7
 #define S5_RX  15
 
+// Feedback lights (pin / count / order / brightness live in MANIFEST.h)
+#define LED_COUNT  (NUM_SPICES * LEDS_PER_BARREL)
+CRGB leds[LED_COUNT];
+static const CRGB COLOR_OFF     = CRGB(0, 0, 0);
+static const CRGB COLOR_CORRECT = CRGB(255, 200, 0);   // yellow
+static const CRGB COLOR_SOLVED  = CRGB(0, 255, 0);     // green
+bool lightsDirty = true;                               // render on next loop
+
 // WiFi + MQTT. Broker address/port come from MANIFEST.h.
 static const char* WIFI_SSID   = "AlchemyGuest";
 static const char* WIFI_PASS   = "VoodooVacation5601";
@@ -81,33 +107,42 @@ static const int   MQTT_PORT   = BROKER_PORT;
 
 // All topics share one root (also used to build the per-spice topics).
 #define TOPIC_ROOT "MermaidsTale/MiniBarrels/"
-static const char* TOPIC_BASE         = TOPIC_ROOT;
-static const char* MQTT_TOPIC_STATUS  = TOPIC_ROOT "status";
-static const char* MQTT_TOPIC_LOG     = TOPIC_ROOT "log";
-static const char* MQTT_TOPIC_COMMAND = TOPIC_ROOT "command";
+static const char* TOPIC_BASE           = TOPIC_ROOT;
+static const char* MQTT_TOPIC_STATUS    = TOPIC_ROOT "status";
+static const char* MQTT_TOPIC_LOG       = TOPIC_ROOT "log";
+static const char* MQTT_TOPIC_COMMAND   = TOPIC_ROOT "command";
+static const char* SCALE_TOPIC_COMMAND  = SCALE_TOPIC_ROOT "command";
 
 //================================================
 //            Per-spice state
 //================================================
+// What the reader physically sees.
 enum SpiceState { ST_CLEAR = 0, ST_FALSE = 1, ST_TRUE = 2 };
 static const char* const STATE_NAMES[] = { "Clear", "False", "True" };
 
+// What goes on the retained system/<Spice> topic (seated + weigh credit).
+enum SysWord { W_CLEAR = 0, W_FALSE = 1, W_UNWEIGHED = 2, W_TRUE = 3 };
+static const char* const SYS_NAMES[] = { "Clear", "False", "Unweighed", "True" };
+
 struct Spice {
   const char* name;
-  const char* expected;           // expected UID for "True" (12 chars, from MANIFEST.h)
+  const char* expected;             // expected UID for "True" (12 chars, from MANIFEST.h)
   Stream*     port;
-  char        topic[TOPIC_BUF];   // pulse topic    (MermaidsTale/MiniBarrels/<Spice>)
-  char        sysTopic[TOPIC_BUF];// seated topic   (.../system/<Spice>, retained)
+  char        topic[TOPIC_BUF];        // pulse topic  (MermaidsTale/MiniBarrels/<Spice>)
+  char        sysTopic[TOPIC_BUF];     // seated topic (.../system/<Spice>, retained)
+  char        weighedTopic[TOPIC_BUF]; // own retained weigh mirror (.../system/weighed/<Spice>)
+  char        scaleTopic[TOPIC_BUF];   // scale's credit topic (MermaidsTale/BalancingScale/<Spice>)
 
   // runtime
-  char          rx[ID_LEN];       // accumulating frame buffer
+  char          rx[ID_LEN];         // accumulating frame buffer
   byte          rxLen;
-  bool          hasTag;           // tracking a UID right now
+  bool          hasTag;             // tracking a UID right now
   char          lastUid[ID_LEN];
-  SpiceState    seated;           // private memory of what is on this reader
-                                  // (drives the solve; survives the wire pulse).
-                                  // NO relation to M3's <Spice>Latch topics.
-  unsigned long pulseClearAtMs;   // when to send the pulse's trailing Clear (0 = none)
+  SpiceState    seated;             // private memory of what is on this reader
+  bool          weighed;            // scale has credited this spice this game
+  bool          credited;           // seated==TRUE && weighed -> light + solve
+  SysWord       lastSys;            // last word published on sysTopic
+  unsigned long pulseClearAtMs;     // when to send the pulse's trailing Clear (0 = none)
 };
 
 // Vanilla on UART0 requires "USB CDC On Boot = Enabled" so Serial
@@ -120,6 +155,7 @@ EspSoftwareSerial::UART rfid4, rfid5;
 
 // Expected tag UIDs come straight from MANIFEST.h. To swap a barrel's tag,
 // edit the matching TAG_* line in MANIFEST.h and re-flash - nothing here changes.
+// Order here = order of the bullets along the light string.
 Spice spices[NUM_SPICES] = {
   { "Vanilla",   TAG_VANILLA,   &rfid1 },
   { "Cloves",    TAG_CLOVES,    &rfid2 },
@@ -136,13 +172,14 @@ static_assert(sizeof(TAG_CLOVES)    - 1 == ID_LEN, "TAG_CLOVES must be 12 chars"
 static_assert(sizeof(TAG_MOLASSES)  - 1 == ID_LEN, "TAG_MOLASSES must be 12 chars");
 static_assert(sizeof(TAG_SUGARCANE) - 1 == ID_LEN, "TAG_SUGARCANE must be 12 chars");
 static_assert(sizeof(TAG_YEAST)     - 1 == ID_LEN, "TAG_YEAST must be 12 chars");
+static_assert(LEDS_PER_BARREL >= 1, "LEDS_PER_BARREL must be at least 1");
 
 WiFiClient   espClient;
 PubSubClient mqtt(espClient);
 
-// Puzzle solve state. SOLVED when all 5 readers' seated states are ST_TRUE.
-// M3 event 26 "Mini Barrels Solved" is gated on status=SOLVED (fires the
-// piston, objectives, GoldSolved). Edge-triggered: publishes once per edge.
+// Puzzle solve state. SOLVED when all 5 barrels are credited (right tag AND
+// weighed). M3 event 26 "Mini Barrels Solved" is gated on status=SOLVED
+// (fires the piston, objectives, GoldSolved). Edge-triggered.
 bool          puzzleSolved      = false;
 unsigned long lastHeartbeat     = 0;
 unsigned long lastMqttOkMs      = 0;   // last time the broker connection was up
@@ -159,6 +196,34 @@ void mqttLogf(const char* format, ...) {
 }
 
 //================================================
+//            Feedback lights
+//================================================
+void renderLights() {
+  for (byte i = 0; i < NUM_SPICES; i++) {
+    CRGB c = puzzleSolved ? COLOR_SOLVED
+           : (spices[i].credited ? COLOR_CORRECT : COLOR_OFF);
+    for (byte p = 0; p < LEDS_PER_BARREL; p++)
+      leds[i * LEDS_PER_BARREL + p] = c;
+  }
+  FastLED.show();
+  lightsDirty = false;
+}
+
+// Boot / LIGHTS_TEST: every bullet RED, then GREEN, then BLUE, then off.
+// Lets a tech confirm the string is wired and see the color order
+// (if "RED" shows green, change LED_COLOR_ORDER in MANIFEST.h).
+void lightsSelfTest() {
+  const CRGB seq[3] = { CRGB(255, 0, 0), CRGB(0, 255, 0), CRGB(0, 0, 255) };
+  for (byte k = 0; k < 3; k++) {
+    fill_solid(leds, LED_COUNT, seq[k]);
+    FastLED.show();
+    delay(300);
+    esp_task_wdt_reset();
+  }
+  lightsDirty = true;   // renderLights() restores the real state next loop
+}
+
+//================================================
 //            WiFi + MQTT
 //================================================
 void ensureWiFi() {
@@ -171,13 +236,22 @@ void ensureWiFi() {
   }
 }
 
-// Re-publish the retained layer (seated states + solve status) so the broker
-// and every watcher re-sync after a reconnect or broker restart. The pulse
-// topics get their resting Clear too - but never while a pulse is in flight
-// (that would cut a sound trigger short).
+SysWord sysWordOf(const Spice& s) {
+  if (s.seated == ST_TRUE)  return s.weighed ? W_TRUE : W_UNWEIGHED;
+  if (s.seated == ST_FALSE) return W_FALSE;
+  return W_CLEAR;
+}
+
+// Re-publish the retained layer (seated words + weigh credits + solve
+// status) so the broker and every watcher re-sync after a reconnect or
+// broker restart. Pulse topics get their resting Clear - never while a
+// pulse is in flight (that would cut a sound trigger short). Weigh mirrors
+// are only re-pushed when TRUE: a fresh boot's "false" must not clobber a
+// retained credit that is about to arrive on subscribe.
 void republishAll() {
   for (byte i = 0; i < NUM_SPICES; i++) {
-    mqtt.publish(spices[i].sysTopic, STATE_NAMES[spices[i].seated], true);
+    mqtt.publish(spices[i].sysTopic, SYS_NAMES[sysWordOf(spices[i])], true);
+    if (spices[i].weighed) mqtt.publish(spices[i].weighedTopic, "true", true);
     if (spices[i].pulseClearAtMs == 0) {
       mqtt.publish(spices[i].topic, STATE_NAMES[ST_CLEAR], true);
     }
@@ -194,6 +268,11 @@ void ensureMqtt() {
   // dies (keepalive timeout ~22s after a silent hang).
   if (mqtt.connect(clientId.c_str(), MQTT_TOPIC_STATUS, 0, true, "OFFLINE")) {
     mqtt.subscribe(MQTT_TOPIC_COMMAND);
+    mqtt.subscribe(SCALE_TOPIC_COMMAND);          // scale PUZZLE_RESET clears credits
+    for (byte i = 0; i < NUM_SPICES; i++) {
+      mqtt.subscribe(spices[i].scaleTopic);       // scale credit ("true")
+      mqtt.subscribe(spices[i].weighedTopic);     // own retained mirror (boot recovery)
+    }
     republishAll();   // retained ONLINE overwrites stale OFFLINE + full re-sync
     mqttLogf("%s v%s online", PROP_NAME, VERSION);
   } else {
@@ -201,21 +280,139 @@ void ensureMqtt() {
   }
 }
 
-// ---- WatchTower command handling ----------------------------------------
-// Report the number of correct barrels as a quick diagnostic state string.
-// Protocol standard: the reply goes back on /command (same as PONG); the
-// echo lands in the unknown-command branch, which only prints to serial.
+//================================================
+//            State machine helpers
+//================================================
+byte creditedCount() {
+  byte n = 0;
+  for (byte i = 0; i < NUM_SPICES; i++) if (spices[i].credited) n++;
+  return n;
+}
+byte weighedCount() {
+  byte n = 0;
+  for (byte i = 0; i < NUM_SPICES; i++) if (spices[i].weighed) n++;
+  return n;
+}
+
+// Recompute a barrel's credited flag from seated + weighed, mirror the
+// resulting word to retained system/<Spice>, and flag the lights.
+void syncSpice(Spice& s) {
+  SysWord w = sysWordOf(s);
+  bool nowCredited = (w == W_TRUE);
+  if (nowCredited != s.credited) {
+    s.credited  = nowCredited;
+    lightsDirty = true;
+  }
+  if (w != s.lastSys) {
+    s.lastSys = w;
+    mqtt.publish(s.sysTopic, SYS_NAMES[w], true);   // retained truth
+    Serial.printf("[%s] system=%s\n", s.name, SYS_NAMES[w]);
+  }
+}
+
+// Update the reader's physical memory for one barrel.
+void setSeated(Spice& s, SpiceState newState) {
+  if (s.seated == newState) return;
+  s.seated = newState;
+  syncSpice(s);
+}
+
+// Fire a wire pulse on the public spice topic: True/False now, Clear
+// scheduled PULSE_MS later (sent by servicePulses). Purely for M3's
+// per-placement sound effects.
+void firePulse(Spice& s, SpiceState st) {
+  mqtt.publish(s.topic, STATE_NAMES[st], false);   // not retained - a pulse, not a state
+  s.pulseClearAtMs = millis() + PULSE_MS;
+  if (s.pulseClearAtMs == 0) s.pulseClearAtMs = 1;  // 0 means "no pulse pending"
+  Serial.printf("[%s] pulse %s\n", s.name, STATE_NAMES[st]);
+}
+
+// Scale credit for one spice arrives (or is cleared). If the right barrel
+// is already sitting on its reader, this is the moment it registers as
+// correct: fire the True pulse so M3 plays the SFX now.
+void setWeighed(Spice& s, bool on, bool announce) {
+  if (s.weighed == on) return;
+  s.weighed = on;
+  mqtt.publish(s.weighedTopic, on ? "true" : "false", true);
+  bool wasCredited = s.credited;
+  syncSpice(s);
+  if (announce) mqttLogf("%s weighed %s (credits %u/%u)", s.name, on ? "OK" : "cleared",
+                         (unsigned)weighedCount(), (unsigned)NUM_SPICES);
+  if (s.credited && !wasCredited) firePulse(s, ST_TRUE);
+}
+
+void clearAllWeighed(const char* why) {
+  for (byte i = 0; i < NUM_SPICES; i++) setWeighed(spices[i], false, false);
+  mqttLogf("weigh credits cleared (%s)", why);
+}
+
+// Send the trailing Clear of any elapsed pulse (retained - Clear is the
+// resting value on the public topic, so M3's latch re-arms and a replayed
+// retained True can never re-fire a sound after a broker/M3 restart).
+void servicePulses() {
+  unsigned long now = millis();
+  for (byte i = 0; i < NUM_SPICES; i++) {
+    Spice& s = spices[i];
+    if (s.pulseClearAtMs != 0 && (long)(now - s.pulseClearAtMs) >= 0) {
+      s.pulseClearAtMs = 0;
+      mqtt.publish(s.topic, STATE_NAMES[ST_CLEAR], true);
+      Serial.printf("[%s] pulse Clear\n", s.name);
+    }
+  }
+}
+
+// Publish status=SOLVED once when all 5 barrels are credited; revert to
+// ONLINE (edge-triggered) if a credited barrel is displaced or a credit
+// is cleared.
+void checkSolved() {
+  bool all = (creditedCount() == NUM_SPICES);
+  if (all && !puzzleSolved) {
+    puzzleSolved = true;
+    lightsDirty  = true;
+    mqtt.publish(MQTT_TOPIC_STATUS, "SOLVED", true);
+    mqttLogf("%s SOLVED - all 5 barrels placed and weighed", PROP_NAME);
+  } else if (!all && puzzleSolved) {
+    puzzleSolved = false;
+    lightsDirty  = true;
+    mqtt.publish(MQTT_TOPIC_STATUS, "ONLINE", true);
+    mqttLogf("%s unsolved - a barrel changed", PROP_NAME);
+  }
+}
+
+//================================================
+//            WatchTower / MQTT command handling
+//================================================
+// Report correct-barrel count as a quick diagnostic state string.
+// Protocol standard: the reply goes back on /command (same as PONG).
 void promptStatus() {
-  byte correct = 0;
-  for (byte i = 0; i < NUM_SPICES; i++)
-    if (spices[i].seated == ST_TRUE) correct++;
   char reply[64];
   snprintf(reply, sizeof(reply), "%s|%u/%u|UP:%lus|V%s",
            puzzleSolved ? "SOLVED" : "PLAYING",
-           correct, (unsigned)NUM_SPICES, millis() / 1000UL, VERSION);
+           (unsigned)creditedCount(), (unsigned)NUM_SPICES, millis() / 1000UL, VERSION);
   mqtt.publish(MQTT_TOPIC_COMMAND, reply);
-  mqttLogf("STATUS -> %s", reply);
+  mqttLogf("STATUS -> %s (weighed %u/%u)", reply, (unsigned)weighedCount(), (unsigned)NUM_SPICES);
 }
+
+// The only path that empties the seated memory. Wipe every layer and
+// cancel in-flight pulses. A barrel left seated re-announces on its next
+// reader re-poll (4s-2min) and simply counts again (once re-weighed).
+void puzzleReset() {
+  for (byte i = 0; i < NUM_SPICES; i++) {
+    spices[i].hasTag         = false;
+    spices[i].pulseClearAtMs = 0;
+    memset(spices[i].lastUid, 0, ID_LEN);
+    setWeighed(spices[i], false, false);
+    setSeated(spices[i], ST_CLEAR);
+    mqtt.publish(spices[i].topic, STATE_NAMES[ST_CLEAR], true);
+  }
+  puzzleSolved = false;
+  lightsDirty  = true;
+  mqtt.publish(MQTT_TOPIC_STATUS, "ONLINE", true);
+  mqttLogf("PUZZLE_RESET -> all layers cleared");
+}
+
+static bool payloadTrue(const char* p)  { return !strcasecmp(p, "true")  || !strcmp(p, "1"); }
+static bool payloadFalse(const char* p) { return !strcasecmp(p, "false") || !strcmp(p, "0") || !strcasecmp(p, "clear"); }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   char message[64];
@@ -229,6 +426,32 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   if (*msg == '\0') return;   // retained-erase publishes "" - not a command
   char* end = msg + strlen(msg) - 1;
   while (end > msg && (*end == ' ' || *end == '\r' || *end == '\n')) *end-- = '\0';
+
+  // ---- Balancing Scale: PUZZLE_RESET on its command topic clears credits.
+  // (Everything else on that topic - PING/PONG/OK/STATUS - is not ours.)
+  if (strcmp(topic, SCALE_TOPIC_COMMAND) == 0) {
+    if (strcmp(msg, "PUZZLE_RESET") == 0) clearAllWeighed("scale PUZZLE_RESET");
+    return;
+  }
+
+  // ---- Per-spice: scale credit, or our own retained mirror on boot.
+  for (byte i = 0; i < NUM_SPICES; i++) {
+    Spice& s = spices[i];
+    if (strcmp(topic, s.scaleTopic) == 0) {
+      if (payloadTrue(msg))       setWeighed(s, true,  true);
+      else if (payloadFalse(msg)) setWeighed(s, false, true);
+      return;
+    }
+    if (strcmp(topic, s.weighedTopic) == 0) {
+      // Only ever RESTORE a credit from the mirror (retained "true" after a
+      // reboot). "false" there is our own write - ignoring it can't hurt.
+      if (payloadTrue(msg) && !s.weighed) {
+        setWeighed(s, true, false);
+        mqttLogf("%s weigh credit restored from retained mirror", s.name);
+      }
+      return;
+    }
+  }
 
   if (strcmp(topic, MQTT_TOPIC_COMMAND) != 0) return;
   Serial.printf("[MQTT] command: %s\n", msg);
@@ -249,42 +472,16 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     return;
   }
   if (strcmp(msg, "PUZZLE_RESET") == 0) {
-    // The reset is the only path that empties the seated memory. Wipe both
-    // layers to Clear and cancel any in-flight pulses. A barrel left seated
-    // re-announces on its next reader re-poll (4s-2min) and simply counts
-    // again - fine between games, when staff strike the barrels anyway.
-    for (byte i = 0; i < NUM_SPICES; i++) {
-      spices[i].hasTag         = false;
-      spices[i].pulseClearAtMs = 0;
-      memset(spices[i].lastUid, 0, ID_LEN);
-      setSeated(spices[i], ST_CLEAR);
-      mqtt.publish(spices[i].topic, STATE_NAMES[ST_CLEAR], true);
-    }
-    puzzleSolved = false;
-    mqtt.publish(MQTT_TOPIC_STATUS, "ONLINE", true);
+    puzzleReset();
     mqtt.publish(MQTT_TOPIC_COMMAND, "OK");
-    Serial.println("[MQTT] PUZZLE_RESET -> both layers cleared");
+    return;
+  }
+  if (strcmp(msg, "LIGHTS_TEST") == 0) {
+    mqtt.publish(MQTT_TOPIC_COMMAND, "OK");
+    lightsSelfTest();
     return;
   }
   Serial.printf("[MQTT] unknown command: %s\n", msg);
-}
-
-// Publish status=SOLVED once when all 5 seated states are True; revert to
-// ONLINE (edge-triggered) if a correct barrel is displaced by a wrong tag.
-void checkSolved() {
-  bool allTrue = true;
-  for (byte i = 0; i < NUM_SPICES; i++)
-    if (spices[i].seated != ST_TRUE) { allTrue = false; break; }
-
-  if (allTrue && !puzzleSolved) {
-    puzzleSolved = true;
-    mqtt.publish(MQTT_TOPIC_STATUS, "SOLVED", true);
-    mqttLogf("%s SOLVED - all 5 barrels correct", PROP_NAME);
-  } else if (!allTrue && puzzleSolved) {
-    puzzleSolved = false;
-    mqtt.publish(MQTT_TOPIC_STATUS, "ONLINE", true);
-    mqttLogf("%s unsolved - a barrel changed", PROP_NAME);
-  }
 }
 
 // WatchTower 5-minute heartbeat in the fleet-standard format. Non-retained:
@@ -302,47 +499,12 @@ void heartBeat() {
 }
 
 //================================================
-//            Sensor state machine
+//            Reader scan
 //================================================
-
-// Update the seated memory for one reader and mirror it to the retained
-// .../system/<Spice> topic (the "real list" - what is actually on the
-// readers right now, for WatchTower/diagnostics and anyone watching MQTT).
-void setSeated(Spice& s, SpiceState newState) {
-  if (s.seated == newState) return;
-  s.seated = newState;
-  mqtt.publish(s.sysTopic, STATE_NAMES[newState], true);   // retained truth
-  Serial.printf("[%s] seated=%s\n", s.name, STATE_NAMES[newState]);
-}
-
-// Fire a wire pulse on the public spice topic: True/False now, Clear
-// scheduled PULSE_MS later (sent by servicePulses). Purely for M3's
-// per-placement sound effects.
-void firePulse(Spice& s, SpiceState st) {
-  mqtt.publish(s.topic, STATE_NAMES[st], false);   // not retained - a pulse, not a state
-  s.pulseClearAtMs = millis() + PULSE_MS;
-  if (s.pulseClearAtMs == 0) s.pulseClearAtMs = 1;  // 0 means "no pulse pending"
-  Serial.printf("[%s] pulse %s\n", s.name, STATE_NAMES[st]);
-}
-
-// Send the trailing Clear of any elapsed pulse (retained - Clear is the
-// resting value on the public topic, so M3's latch re-arms and a replayed
-// retained True can never re-fire a sound after a broker/M3 restart).
-void servicePulses() {
-  unsigned long now = millis();
-  for (byte i = 0; i < NUM_SPICES; i++) {
-    Spice& s = spices[i];
-    if (s.pulseClearAtMs != 0 && (long)(now - s.pulseClearAtMs) >= 0) {
-      s.pulseClearAtMs = 0;
-      mqtt.publish(s.topic, STATE_NAMES[ST_CLEAR], true);
-      Serial.printf("[%s] pulse Clear\n", s.name);
-    }
-  }
-}
-
 // Drain one reader. On every complete STX...ETX frame, classify the UID and
 // - if it is a NEW tag for this reader - update the seated memory and fire
-// the SFX pulse. Reader re-reports of the same seated tag are ignored.
+// the SFX pulse (True only if the barrel counts, i.e. right tag AND weighed).
+// Reader re-reports of the same seated tag are ignored.
 void scan(Spice& s) {
   while (s.port->available()) {
     int b = s.port->read();
@@ -357,8 +519,10 @@ void scan(Spice& s) {
           memcpy(s.lastUid, s.rx, ID_LEN);
           s.hasTag = true;
           bool ok = memcmp(s.rx, s.expected, ID_LEN) == 0;
-          setSeated(s, ok ? ST_TRUE : ST_FALSE);   // seated memory -> solve
-          firePulse(s, ok ? ST_TRUE : ST_FALSE);   // wire pulse -> M3 sound
+          setSeated(s, ok ? ST_TRUE : ST_FALSE);          // seated memory -> credit -> solve
+          firePulse(s, s.credited ? ST_TRUE : ST_FALSE);  // wire pulse -> M3 sound
+          if (ok && !s.credited)
+            mqttLogf("%s right barrel placed but NOT weighed yet", s.name);
         }
       }
       s.rxLen = 0;
@@ -381,14 +545,26 @@ void setupRFID() {
   rfid5.begin(RFID_BAUD, SWSERIAL_8N1, S5_RX, -1);
 
   for (byte i = 0; i < NUM_SPICES; i++) {
-    snprintf(spices[i].topic,    TOPIC_BUF, "%s%s",        TOPIC_BASE, spices[i].name);
-    snprintf(spices[i].sysTopic, TOPIC_BUF, "%ssystem/%s", TOPIC_BASE, spices[i].name);
+    snprintf(spices[i].topic,        TOPIC_BUF, "%s%s",                TOPIC_BASE,       spices[i].name);
+    snprintf(spices[i].sysTopic,     TOPIC_BUF, "%ssystem/%s",         TOPIC_BASE,       spices[i].name);
+    snprintf(spices[i].weighedTopic, TOPIC_BUF, "%ssystem/weighed/%s", TOPIC_BASE,       spices[i].name);
+    snprintf(spices[i].scaleTopic,   TOPIC_BUF, "%s%s",                SCALE_TOPIC_ROOT, spices[i].name);
     spices[i].rxLen          = 0;
     spices[i].hasTag         = false;
     spices[i].seated         = ST_CLEAR;
+    spices[i].weighed        = false;
+    spices[i].credited       = false;
+    spices[i].lastSys        = W_CLEAR;
     spices[i].pulseClearAtMs = 0;
     memset(spices[i].lastUid, 0, ID_LEN);
   }
+}
+
+void setupLights() {
+  FastLED.addLeds<WS2811, LED_DATA_PIN, LED_COLOR_ORDER>(leds, LED_COUNT);
+  FastLED.setBrightness(LED_BRIGHTNESS);
+  fill_solid(leds, LED_COUNT, COLOR_OFF);
+  FastLED.show();
 }
 
 void setup() {
@@ -408,6 +584,9 @@ void setup() {
   esp_task_wdt_init(WDT_TIMEOUT_S, true);
 #endif
   esp_task_wdt_add(NULL);
+
+  setupLights();
+  lightsSelfTest();   // R/G/B sweep the moment power lands - proves wiring
 
   ensureWiFi();
   mqtt.setServer(MQTT_SERVER, MQTT_PORT);
@@ -437,5 +616,6 @@ void loop() {
   for (byte i = 0; i < NUM_SPICES; i++) scan(spices[i]);
   servicePulses();
   checkSolved();
+  if (lightsDirty) renderLights();   // one show() per change, never per loop
   heartBeat();
 }

@@ -1,5 +1,5 @@
 //================================================
-//  A Mermaid's Tale - Mini Barrels (v3.2.0)
+//  A Mermaid's Tale - Mini Barrels (v3.1.0)
 //  Target board: ESP32-S3 (UART0 + UART1 + UART2 + 2x SoftwareSerial)
 //  BUILD REQUIREMENT: "USB CDC On Boot = Enabled" (CDCOnBoot=cdc) or
 //  Serial steals UART0 and kills the Vanilla reader.
@@ -13,9 +13,7 @@
 //        scale on the transition - see Balancing-Scale printSuccessToMQTT).
 //  Either order works: weigh first then place, or place first then weigh.
 //
-//  FEEDBACK LIGHTS (v3.2.0): one 15-bullet string, ONE bullet per barrel
-//    at the positions in MANIFEST LED_BULLET_POSITIONS (1,4,8,11,15);
-//    the other ten bullets on the string stay dark.
+//  FEEDBACK LIGHTS: LEDS_PER_BARREL bullets per barrel on one string.
 //    off    = empty, wrong barrel, or right barrel not yet weighed
 //    YELLOW = that barrel counts as correct
 //    GREEN  = all five correct (puzzle solved)
@@ -93,12 +91,9 @@ static const unsigned long RFID_BAUD = 9600;
 #define S4_RX   7
 #define S5_RX  15
 
-// Feedback lights (pin / string length / bullet positions / order /
-// brightness live in MANIFEST.h). The whole string is driven so the
-// unused bullets can be held dark; only the five in barrelBullet[] light.
-#define LED_COUNT  LED_STRING_LENGTH
+// Feedback lights (pin / count / order / brightness live in MANIFEST.h)
+#define LED_COUNT  (NUM_SPICES * LEDS_PER_BARREL)
 CRGB leds[LED_COUNT];
-static const uint8_t barrelBullet1Based[NUM_SPICES] = LED_BULLET_POSITIONS;  // per barrel, reader order
 static const CRGB COLOR_OFF     = CRGB(0, 0, 0);
 static const CRGB COLOR_CORRECT = CRGB(255, 200, 0);   // yellow
 static const CRGB COLOR_SOLVED  = CRGB(0, 255, 0);     // green
@@ -177,8 +172,7 @@ static_assert(sizeof(TAG_CLOVES)    - 1 == ID_LEN, "TAG_CLOVES must be 12 chars"
 static_assert(sizeof(TAG_MOLASSES)  - 1 == ID_LEN, "TAG_MOLASSES must be 12 chars");
 static_assert(sizeof(TAG_SUGARCANE) - 1 == ID_LEN, "TAG_SUGARCANE must be 12 chars");
 static_assert(sizeof(TAG_YEAST)     - 1 == ID_LEN, "TAG_YEAST must be 12 chars");
-static_assert(LED_STRING_LENGTH >= 1, "LED_STRING_LENGTH must be at least 1");
-static_assert(sizeof(barrelBullet1Based) == NUM_SPICES, "LED_BULLET_POSITIONS needs exactly one entry per barrel");
+static_assert(LEDS_PER_BARREL >= 1, "LEDS_PER_BARREL must be at least 1");
 
 WiFiClient   espClient;
 PubSubClient mqtt(espClient);
@@ -204,21 +198,12 @@ void mqttLogf(const char* format, ...) {
 //================================================
 //            Feedback lights
 //================================================
-// Bullet index (0-based) for barrel i. Positions in MANIFEST are 1-based
-// and are clamped to the string so a typo can never write past the array.
-static uint16_t bulletIndexFor(byte i) {
-  uint16_t pos = barrelBullet1Based[i];
-  if (pos < 1) pos = 1;
-  if (pos > LED_STRING_LENGTH) pos = LED_STRING_LENGTH;
-  return pos - 1;
-}
-
 void renderLights() {
-  fill_solid(leds, LED_COUNT, COLOR_OFF);          // unused bullets stay dark
   for (byte i = 0; i < NUM_SPICES; i++) {
     CRGB c = puzzleSolved ? COLOR_SOLVED
            : (spices[i].credited ? COLOR_CORRECT : COLOR_OFF);
-    leds[bulletIndexFor(i)] = c;
+    for (byte p = 0; p < LEDS_PER_BARREL; p++)
+      leds[i * LEDS_PER_BARREL + p] = c;
   }
   FastLED.show();
   lightsDirty = false;

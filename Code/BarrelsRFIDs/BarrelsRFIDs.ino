@@ -1,5 +1,5 @@
 //================================================
-//  A Mermaid's Tale - Mini Barrels (v3.1.0)
+//  A Mermaid's Tale - Mini Barrels (v3.3.0)
 //  Target board: ESP32-S3 (UART0 + UART1 + UART2 + 2x SoftwareSerial)
 //  BUILD REQUIREMENT: "USB CDC On Boot = Enabled" (CDCOnBoot=cdc) or
 //  Serial steals UART0 and kills the Vanilla reader.
@@ -46,9 +46,16 @@
 //  Hardening (v3.0.0, mirrors SunDial Bridge 4.3.0):
 //    - MQTT LWT retained OFFLINE on /status, 30s task WDT, 2min offline
 //      self-reboot, non-blocking MQTT retry, republishAll() on reconnect.
+//
+//  OTA (v3.3.0 - MANDATORY per mqtt-protocol.md, 2026-09-22): ArduinoOTA
+//    listener, hostname = MiniBarrels, password = the Wi-Fi password,
+//    port 3232. After this one USB flash every future flash is wireless:
+//      arduino-cli upload --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc //        -p <board IP> --upload-field password=<Wi-Fi password> Code/BarrelsRFIDs
+//    The board IP is in every STATUS reply and the boot line on /log.
 //================================================
 
 #include <WiFi.h>
+#include <ArduinoOTA.h>   // MANDATORY per mqtt-protocol.md (2026-09-22): wireless re-flash
 #include <PubSubClient.h>
 #include <HardwareSerial.h>
 #include <SoftwareSerial.h>
@@ -103,6 +110,7 @@ bool lightsDirty = true;                               // render on next loop
 static const char* WIFI_SSID   = "AlchemyGuest";
 static const char* WIFI_PASS   = "VoodooVacation5601";
 static const char* MQTT_SERVER = BROKER_IP;
+static const char* OTA_PASSWORD = WIFI_PASS;   // protocol: OTA password = Wi-Fi password
 static const int   MQTT_PORT   = BROKER_PORT;
 
 // All topics share one root (also used to build the per-spice topics).
@@ -236,6 +244,24 @@ void ensureWiFi() {
   }
 }
 
+// Over-the-air re-flash listener (mandatory fleet protocol). Call once,
+// right after Wi-Fi is up. No actuators on this board - the readers and
+// lights simply hold while the new image lands (~30 s), then it reboots.
+// The task WDT is fed from onProgress so a slow upload can't panic-reboot
+// the chip halfway through.
+void setupOTA() {
+  ArduinoOTA.setHostname(OTA_HOSTNAME);
+  ArduinoOTA.setPassword(OTA_PASSWORD);
+  ArduinoOTA.onStart([]() {
+    mqttLogf("OTA update starting - readers and lights hold, back in ~30 s");
+  });
+  ArduinoOTA.onProgress([](unsigned int, unsigned int) { esp_task_wdt_reset(); });
+  ArduinoOTA.onEnd([]()   { Serial.println("OTA done, rebooting"); });
+  ArduinoOTA.onError([](ota_error_t e) { Serial.printf("OTA error %u\n", (unsigned)e); });
+  ArduinoOTA.begin();
+  Serial.printf("OTA ready: %s @ %s:%d\n", OTA_HOSTNAME, WiFi.localIP().toString().c_str(), OTA_PORT);
+}
+
 SysWord sysWordOf(const Spice& s) {
   if (s.seated == ST_TRUE)  return s.weighed ? W_TRUE : W_UNWEIGHED;
   if (s.seated == ST_FALSE) return W_FALSE;
@@ -274,7 +300,8 @@ void ensureMqtt() {
       mqtt.subscribe(spices[i].weighedTopic);     // own retained mirror (boot recovery)
     }
     republishAll();   // retained ONLINE overwrites stale OFFLINE + full re-sync
-    mqttLogf("%s v%s online", PROP_NAME, VERSION);
+    mqttLogf("%s v%s online at IP %s (OTA :%d)", PROP_NAME, VERSION,
+             WiFi.localIP().toString().c_str(), OTA_PORT);
   } else {
     Serial.printf("MQTT failed rc=%d\n", mqtt.state());
   }
@@ -385,10 +412,11 @@ void checkSolved() {
 // Report correct-barrel count as a quick diagnostic state string.
 // Protocol standard: the reply goes back on /command (same as PONG).
 void promptStatus() {
-  char reply[64];
-  snprintf(reply, sizeof(reply), "%s|%u/%u|UP:%lus|V%s",
+  char reply[96];
+  snprintf(reply, sizeof(reply), "%s|%u/%u|UP:%lus|IP:%s|OTA:%d|V%s",
            puzzleSolved ? "SOLVED" : "PLAYING",
-           (unsigned)creditedCount(), (unsigned)NUM_SPICES, millis() / 1000UL, VERSION);
+           (unsigned)creditedCount(), (unsigned)NUM_SPICES, millis() / 1000UL,
+           WiFi.localIP().toString().c_str(), OTA_PORT, VERSION);
   mqtt.publish(MQTT_TOPIC_COMMAND, reply);
   mqttLogf("STATUS -> %s (weighed %u/%u)", reply, (unsigned)weighedCount(), (unsigned)NUM_SPICES);
 }
@@ -589,6 +617,7 @@ void setup() {
   lightsSelfTest();   // R/G/B sweep the moment power lands - proves wiring
 
   ensureWiFi();
+  setupOTA();          // mandatory: wireless re-flash listener, right after Wi-Fi
   mqtt.setServer(MQTT_SERVER, MQTT_PORT);
   mqtt.setCallback(mqttCallback);
   mqtt.setBufferSize(256);
@@ -600,6 +629,7 @@ void setup() {
 void loop() {
   esp_task_wdt_reset();
   ensureWiFi();
+  ArduinoOTA.handle();  // mandatory: service OTA every loop
   ensureMqtt();
   mqtt.loop();
 

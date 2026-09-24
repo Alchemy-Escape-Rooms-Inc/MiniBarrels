@@ -13,7 +13,7 @@
 #pragma once
 
 #define DEVICE_NAME           "MiniBarrels"
-#define FIRMWARE_VERSION      "3.1.0"
+#define FIRMWARE_VERSION      "3.3.0"
 #define BOARD_TYPE            "ESP32-S3"
 #define ROOM                  "MermaidsTale"
 #define DESCRIPTION           "Five RFID barrel readers with WS2811 feedback lights. A barrel counts as CORRECT only when the right tag is on its reader AND the BalancingScale has reported that spice weighed correctly (MermaidsTale/BalancingScale/<Spice>=true). Light per barrel: off (empty/wrong/right-but-unweighed), YELLOW (correct), all GREEN when all five correct -> status=SOLVED -> M3 barrel-piston finale. Public MermaidsTale/MiniBarrels/<Spice> gets a 2s True/False PULSE per placement (M3 per-barrel SFX); retained .../system/<Spice> holds the real state (Clear/False/Unweighed/True)."
@@ -27,9 +27,20 @@
 #define BROKER_PORT           1883
 #define HEARTBEAT_MS_MANIFEST 300000
 
+// Over-the-air updates - MANDATORY on every Wi-Fi board (mqtt-protocol.md, 2026-09-22).
+// Password = the Wi-Fi password (OTA_PASSWORD aliases WIFI_PASS in the sketch).
+// After the one-time USB flash: arduino-cli upload -p <board IP> --upload-field password=<Wi-Fi password> ...
+#define OTA_ENABLED           "yes"
+#define OTA_HOSTNAME          "MiniBarrels"         // = DEVICE_NAME
+#if !defined(ESP8266)
+#define OTA_PORT              3232                  // ESP32 / S3 (first so the WatchTower parser reads it)
+#else
+#define OTA_PORT              8266
+#endif
+
 #define SUBSCRIBE_TOPICS      "MermaidsTale/MiniBarrels/command, MermaidsTale/BalancingScale/{Vanilla|Cloves|Molasses|SugarCane|Yeast} (weigh credit, 'true'), MermaidsTale/BalancingScale/command (PUZZLE_RESET clears weigh credits), MermaidsTale/MiniBarrels/system/weighed/{Spice} (own retained mirror, reboot recovery)"
 #define PUBLISH_TOPICS        "MermaidsTale/MiniBarrels/status, MermaidsTale/MiniBarrels/log, MermaidsTale/MiniBarrels/{Vanilla|Cloves|Molasses|SugarCane|Yeast} (2s pulses), MermaidsTale/MiniBarrels/system/{Spice} (retained: Clear|False|Unweighed|True), MermaidsTale/MiniBarrels/system/weighed/{Spice} (retained true|false)"
-#define SUPPORTED_COMMANDS    "PING, STATUS, RESET, PUZZLE_RESET, LIGHTS_TEST"
+#define SUPPORTED_COMMANDS    "PING, STATUS (reply PLAYING|n/5|UP:xs|IP:x.x.x.x|OTA:3232|Vx), RESET, PUZZLE_RESET, LIGHTS_TEST"
 
 // The scale's per-pouch topics are built as SCALE_TOPIC_ROOT + spice name.
 // Must match Balancing-Scale printSuccessToMQTT() (MQTT_TOPIC "/<Spice>").
@@ -64,6 +75,6 @@
 // Hardware - RFID reader RX pins (one UART per barrel) + light data pin
 #define PIN_CONFIG            "VANILLA_RX=4 (UART0), CLOVES_RX=5 (UART1), MOLASSES_RX=6 (UART2), SUGARCANE_RX=7 (SoftSerial), YEAST_RX=15 (SoftSerial), LED_DATA=16 (WS2811 string)"
 #define COMPONENTS            "5x serial RFID readers (STX/ETX framed, 9600 baud). Vanilla/Cloves/Molasses on hardware UARTs, SugarCane/Yeast on SoftwareSerial. 1x WS2811 12V bullet-pixel string (FastLED), LEDS_PER_BARREL bullets per barrel, single data line on GPIO16."
-#define KNOWN_QUIRKS          "MUST be built with 'USB CDC On Boot = Enabled' (CDCOnBoot=cdc) or Serial steals UART0 and kills the Vanilla reader. Readers re-report seated tags erratically (4s-2min) and go silent in between - NEVER add silence-based removal (v2.7.1/v2.7.2 flap bug); seated state clears only via different-tag or PUZZLE_RESET. <Spice>Latch topics on the wire belong to M3 (SFX bookkeeping), never publish to them. Tag IDs live in MANIFEST.h - edit there, not in the .ino. v3.0.0 hardening: LWT retained OFFLINE on /status, 30s task WDT, 2min offline self-reboot, non-blocking MQTT retry w/ full retained re-sync on reconnect; heartbeat = fleet-standard HEARTBEAT:STATE:UPxs:RSSIx. v3.1.0 weigh gate: the scale's BalancingScale/<Spice>=true is NON-retained and the scale never sends false - this board mirrors credits to retained system/weighed/<Spice> so a reboot mid-game keeps them; credits clear on PUZZLE_RESET to EITHER this board OR the scale (M3 game reset sends the scale one). A stale credit from an aborted game = send PUZZLE_RESET. Lights: 12V bullets need common ground with the S3 and ideally a 5V level shifter (74AHCT125) on the data line; 3.3V data straight in usually works for short runs. A right barrel that is NOT yet weighed pulses False on the wire (wrong-barrel SFX) and reads Unweighed on system/<Spice> - the AI ignores that value and praises only on True."
+#define KNOWN_QUIRKS          "MUST be built with 'USB CDC On Boot = Enabled' (CDCOnBoot=cdc) or Serial steals UART0 and kills the Vanilla reader. Readers re-report seated tags erratically (4s-2min) and go silent in between - NEVER add silence-based removal (v2.7.1/v2.7.2 flap bug); seated state clears only via different-tag or PUZZLE_RESET. <Spice>Latch topics on the wire belong to M3 (SFX bookkeeping), never publish to them. Tag IDs live in MANIFEST.h - edit there, not in the .ino. v3.0.0 hardening: LWT retained OFFLINE on /status, 30s task WDT, 2min offline self-reboot, non-blocking MQTT retry w/ full retained re-sync on reconnect; heartbeat = fleet-standard HEARTBEAT:STATE:UPxs:RSSIx. v3.1.0 weigh gate: the scale's BalancingScale/<Spice>=true is NON-retained and the scale never sends false - this board mirrors credits to retained system/weighed/<Spice> so a reboot mid-game keeps them; credits clear on PUZZLE_RESET to EITHER this board OR the scale (M3 game reset sends the scale one). A stale credit from an aborted game = send PUZZLE_RESET. Lights: 12V bullets need common ground with the S3 and ideally a 5V level shifter (74AHCT125) on the data line; 3.3V data straight in usually works for short runs. A right barrel that is NOT yet weighed pulses False on the wire (wrong-barrel SFX) and reads Unweighed on system/<Spice> - the AI ignores that value and praises only on True. v3.3.0 OTA: wireless re-flash (hostname MiniBarrels, port 3232, password = Wi-Fi) - arduino-cli upload --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc -p <board IP> --upload-field password=<Wi-Fi pw> Code/BarrelsRFIDs; the IP is in every STATUS reply and the boot /log line. The room board still needs ONE more USB flash (CDC build, native USB COM port) to receive OTA."
 
 #define REPO_URL              "https://github.com/Alchemy-Escape-Rooms-Inc/MiniBarrels"

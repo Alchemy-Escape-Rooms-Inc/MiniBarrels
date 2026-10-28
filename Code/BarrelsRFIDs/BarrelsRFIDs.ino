@@ -547,6 +547,8 @@ void scan(Spice& s) {
           memcpy(s.lastUid, s.rx, ID_LEN);
           s.hasTag = true;
           bool ok = memcmp(s.rx, s.expected, ID_LEN) == 0;
+          mqttLogf("%s scanned UID %.*s (%s)", s.name, ID_LEN, s.rx,
+                   ok ? "RIGHT" : "wrong");                // tag-swap capture
           setSeated(s, ok ? ST_TRUE : ST_FALSE);          // seated memory -> credit -> solve
           firePulse(s, s.credited ? ST_TRUE : ST_FALSE);  // wire pulse -> M3 sound
           if (ok && !s.credited)

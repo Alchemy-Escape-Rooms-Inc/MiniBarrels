@@ -13,7 +13,7 @@
 #pragma once
 
 #define DEVICE_NAME           "MiniBarrels"
-#define FIRMWARE_VERSION      "3.3.1"
+#define FIRMWARE_VERSION      "3.3.2"
 #define BOARD_TYPE            "ESP32-S3"
 #define ROOM                  "MermaidsTale"
 #define DESCRIPTION           "Five RFID barrel readers with WS2811 feedback lights. A barrel counts as CORRECT only when the right tag is on its reader AND the BalancingScale has reported that spice weighed correctly (MermaidsTale/BalancingScale/<Spice>=true). Light per barrel: off (empty/wrong/right-but-unweighed), YELLOW (correct), all GREEN when all five correct -> status=SOLVED -> M3 barrel-piston finale. Public MermaidsTale/MiniBarrels/<Spice> gets a 2s True/False PULSE per placement (M3 per-barrel SFX); retained .../system/<Spice> holds the real state (Clear/False/Unweighed/True)."
@@ -50,14 +50,14 @@
 // Barrel RFID Tag IDs  (the correct/expected UID for each barrel)
 // 12 hex chars each, exactly as the reader reports on the wire.
 // EDIT HERE to swap a tag, then re-flash. The .ino reads these directly.
-// Yeast UID captured off WatchTower wire log 2026-07-26 14:06 (new tag,
-// replaced the original 0112D7B87A06).
+// All five tags replaced 2026-10-28; UIDs captured off the v3.3.1
+// "scanned UID" /log lines with each barrel seated on its own reader.
 // ------------------------------------------------------------
-#define TAG_VANILLA           "51000D90AF63"
-#define TAG_CLOVES            "0112D7B8710D"
-#define TAG_MOLASSES          "51000C74FAD3"
-#define TAG_SUGARCANE         "0112D7B8661A"
-#define TAG_YEAST             "0112D7BB8CF3"
+#define TAG_VANILLA           "51000BBDFE19"
+#define TAG_CLOVES            "51000EBE6283"
+#define TAG_MOLASSES          "51000E227A07"
+#define TAG_SUGARCANE         "51000BE247FF"
+#define TAG_YEAST             "51000A64300F"
 
 // ------------------------------------------------------------
 // Feedback lights - one WS2811 bullet string daisy-chained through all

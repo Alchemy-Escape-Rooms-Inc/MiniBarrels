@@ -151,6 +151,9 @@ struct Spice {
   bool          credited;           // seated==TRUE && weighed -> light + solve
   SysWord       lastSys;            // last word published on sysTopic
   unsigned long pulseClearAtMs;     // when to send the pulse's trailing Clear (0 = none)
+  uint32_t      rawBytes;           // v3.3.3 diag: bytes off this reader since last RAW report
+  uint32_t      rawFrames;          // v3.3.3 diag: complete STX..ETX frames (any length)
+  uint8_t       lastFrameLen;       // v3.3.3 diag: length of the last frame seen
 };
 
 // Vanilla on UART0 requires "USB CDC On Boot = Enabled" so Serial
@@ -536,11 +539,14 @@ void heartBeat() {
 void scan(Spice& s) {
   while (s.port->available()) {
     int b = s.port->read();
+    s.rawBytes++;
 #if DEBUG_RFID
     Serial.printf("[%s] 0x%02X @%lu\n", s.name, b, millis());
 #endif
     if (b == STX) { s.rxLen = 0; continue; }
     if (b == ETX) {
+      s.rawFrames++;
+      s.lastFrameLen = s.rxLen;
       if (s.rxLen == ID_LEN) {
         bool sameTag = s.hasTag && memcmp(s.rx, s.lastUid, ID_LEN) == 0;
         if (!sameTag) {
@@ -562,6 +568,29 @@ void scan(Spice& s) {
       s.rx[s.rxLen++] = (char)b;
     }
   }
+}
+
+// v3.3.3 diag: every 3 s, if any reader sent bytes, log raw byte/frame
+// counts per reader to /log. Silent when every reader is silent. Tells
+// "reader sends nothing" (wiring/power) apart from "reader sends garbage"
+// (baud/noise - frames of the wrong length are otherwise dropped silently).
+void reportRaw() {
+  static unsigned long lastMs = 0;
+  if (millis() - lastMs < 3000) return;
+  lastMs = millis();
+  bool any = false;
+  for (byte i = 0; i < NUM_SPICES; i++) if (spices[i].rawBytes) any = true;
+  if (!any) return;
+  char buf[200];
+  int n = snprintf(buf, sizeof(buf), "RAW");
+  for (byte i = 0; i < NUM_SPICES && n < (int)sizeof(buf); i++) {
+    Spice& s = spices[i];
+    n += snprintf(buf + n, sizeof(buf) - n, " %s=%lub/%luf/len%u", s.name,
+                  (unsigned long)s.rawBytes, (unsigned long)s.rawFrames, s.lastFrameLen);
+    s.rawBytes = 0;
+    s.rawFrames = 0;
+  }
+  mqtt.publish(MQTT_TOPIC_LOG, buf);  // >128 chars, so not via mqttLogf
 }
 
 //================================================
@@ -646,6 +675,7 @@ void loop() {
   }
 
   for (byte i = 0; i < NUM_SPICES; i++) scan(spices[i]);
+  reportRaw();
   servicePulses();
   checkSolved();
   if (lightsDirty) renderLights();   // one show() per change, never per loop

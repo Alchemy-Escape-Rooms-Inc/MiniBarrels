@@ -13,7 +13,7 @@
 #pragma once
 
 #define DEVICE_NAME           "MiniBarrels"
-#define FIRMWARE_VERSION      "3.3.3"
+#define FIRMWARE_VERSION      "3.3.4"
 #define BOARD_TYPE            "ESP32-S3"
 #define ROOM                  "MermaidsTale"
 #define DESCRIPTION           "Five RFID barrel readers with WS2811 feedback lights. A barrel counts as CORRECT only when the right tag is on its reader AND the BalancingScale has reported that spice weighed correctly (MermaidsTale/BalancingScale/<Spice>=true). Light per barrel: off (empty/wrong/right-but-unweighed), YELLOW (correct), all GREEN when all five correct -> status=SOLVED -> M3 barrel-piston finale. Public MermaidsTale/MiniBarrels/<Spice> gets a 2s True/False PULSE per placement (M3 per-barrel SFX); retained .../system/<Spice> holds the real state (Clear/False/Unweighed/True)."
@@ -53,11 +53,11 @@
 // All five tags replaced 2026-10-28; UIDs captured off the v3.3.1
 // "scanned UID" /log lines with each barrel seated on its own reader.
 // ------------------------------------------------------------
-#define TAG_VANILLA           "51000BBDFE19"
-#define TAG_CLOVES            "51000EBE6283"
-#define TAG_MOLASSES          "51000E227A07"
-#define TAG_SUGARCANE         "51000BE247FF"
-#define TAG_YEAST             "51000A64300F"
+#define TAG_VANILLA           "5100BC145CA5"
+#define TAG_CLOVES            "51000AB1E60C"
+#define TAG_MOLASSES          "51000BDF46C3"
+#define TAG_SUGARCANE         "51000C805B86"
+#define TAG_YEAST             "51000BD3971E"
 
 // ------------------------------------------------------------
 // Feedback lights - one WS2811 bullet string daisy-chained through all

@@ -13,7 +13,7 @@
 #pragma once
 
 #define DEVICE_NAME           "MiniBarrels"
-#define FIRMWARE_VERSION      "3.3.6"
+#define FIRMWARE_VERSION      "3.3.7"
 #define BOARD_TYPE            "ESP32-S3"
 #define ROOM                  "MermaidsTale"
 #define DESCRIPTION           "Five RFID barrel readers with WS2811 feedback lights. A barrel counts as CORRECT only when the right tag is on its reader AND the BalancingScale has reported that spice weighed correctly (MermaidsTale/BalancingScale/<Spice>=true). Light per barrel: off (empty/wrong/right-but-unweighed), YELLOW (correct), all GREEN when all five correct -> status=SOLVED -> M3 barrel-piston finale. Public MermaidsTale/MiniBarrels/<Spice> gets a 2s True/False PULSE per placement (M3 per-barrel SFX); retained .../system/<Spice> holds the real state (Clear/False/Unweighed/True)."

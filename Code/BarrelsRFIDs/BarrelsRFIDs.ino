@@ -155,6 +155,9 @@ struct Spice {
   uint32_t      rawBytes;           // v3.3.3 diag: bytes off this reader since last RAW report
   uint32_t      rawFrames;          // v3.3.3 diag: complete STX..ETX frames (any length)
   uint8_t       lastFrameLen;       // v3.3.3 diag: length of the last frame seen
+  uint32_t      rawGood;            // v3.3.7 diag: frames that passed the hex + checksum test
+  byte          rawTail[16];        // v3.3.7 diag: last bytes off this reader, for RAWHEX
+  byte          rawTailPos;
 };
 
 // Vanilla on UART0 requires "USB CDC On Boot = Enabled" so Serial
@@ -537,10 +540,31 @@ void heartBeat() {
 // - if it is a NEW tag for this reader - update the seated memory and fire
 // the SFX pulse (True only if the barrel counts, i.e. right tag AND weighed).
 // Reader re-reports of the same seated tag are ignored.
+// v3.3.7: a frame counts only if it is 12 hex chars with a good XOR checksum
+// (last byte = XOR of the first five). Line noise must not unseat a barrel.
+static int hexVal(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+static bool frameValid(const char* rx) {
+  byte sum = 0;
+  for (byte i = 0; i < ID_LEN; i += 2) {
+    int hi = hexVal(rx[i]), lo = hexVal(rx[i + 1]);
+    if (hi < 0 || lo < 0) return false;
+    byte v = (hi << 4) | lo;
+    if (i == ID_LEN - 2) return v == sum;
+    sum ^= v;
+  }
+  return false;
+}
+
 void scan(Spice& s) {
   while (s.port->available()) {
     int b = s.port->read();
     s.rawBytes++;
+    s.rawTail[s.rawTailPos++ % sizeof(s.rawTail)] = (byte)b;
 #if DEBUG_RFID
     Serial.printf("[%s] 0x%02X @%lu\n", s.name, b, millis());
 #endif
@@ -548,7 +572,8 @@ void scan(Spice& s) {
     if (b == ETX) {
       s.rawFrames++;
       s.lastFrameLen = s.rxLen;
-      if (s.rxLen == ID_LEN) {
+      if (s.rxLen == ID_LEN && frameValid(s.rx)) {
+        s.rawGood++;
         bool sameTag = s.hasTag && memcmp(s.rx, s.lastUid, ID_LEN) == 0;
         if (!sameTag) {
           memcpy(s.lastUid, s.rx, ID_LEN);
@@ -588,10 +613,25 @@ void reportRaw() {
     Spice& s = spices[i];
     n += snprintf(buf + n, sizeof(buf) - n, " %s=%lub/%luf/len%u", s.name,
                   (unsigned long)s.rawBytes, (unsigned long)s.rawFrames, s.lastFrameLen);
-    s.rawBytes = 0;
-    s.rawFrames = 0;
   }
   mqtt.publish(MQTT_TOPIC_LOG, buf);  // >128 chars, so not via mqttLogf
+  // v3.3.7 diag: bytes arrived but no frame passed - show what they were
+  for (byte i = 0; i < NUM_SPICES; i++) {
+    Spice& s = spices[i];
+    if (s.rawBytes && !s.rawGood) {
+      char hex[72];
+      int h = snprintf(hex, sizeof(hex), "RAWHEX %s", s.name);
+      byte count = min((uint32_t)sizeof(s.rawTail), s.rawBytes);
+      for (byte k = 0; k < count; k++) {
+        byte at = (byte)(s.rawTailPos - count + k) % sizeof(s.rawTail);
+        h += snprintf(hex + h, sizeof(hex) - h, " %02X", s.rawTail[at]);
+      }
+      mqtt.publish(MQTT_TOPIC_LOG, hex);
+    }
+    s.rawBytes = 0;
+    s.rawFrames = 0;
+    s.rawGood = 0;
+  }
 }
 
 //================================================

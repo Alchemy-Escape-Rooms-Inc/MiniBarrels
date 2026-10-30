@@ -267,7 +267,7 @@ void setupOTA() {
 }
 
 SysWord sysWordOf(const Spice& s) {
-  if (s.seated == ST_TRUE)  return s.weighed ? W_TRUE : W_UNWEIGHED;
+  if (s.seated == ST_TRUE)  return (s.weighed || !REQUIRE_WEIGH) ? W_TRUE : W_UNWEIGHED;
   if (s.seated == ST_FALSE) return W_FALSE;
   return W_CLEAR;
 }

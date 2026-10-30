@@ -13,7 +13,7 @@
 #pragma once
 
 #define DEVICE_NAME           "MiniBarrels"
-#define FIRMWARE_VERSION      "3.3.5"
+#define FIRMWARE_VERSION      "3.3.6"
 #define BOARD_TYPE            "ESP32-S3"
 #define ROOM                  "MermaidsTale"
 #define DESCRIPTION           "Five RFID barrel readers with WS2811 feedback lights. A barrel counts as CORRECT only when the right tag is on its reader AND the BalancingScale has reported that spice weighed correctly (MermaidsTale/BalancingScale/<Spice>=true). Light per barrel: off (empty/wrong/right-but-unweighed), YELLOW (correct), all GREEN when all five correct -> status=SOLVED -> M3 barrel-piston finale. Public MermaidsTale/MiniBarrels/<Spice> gets a 2s True/False PULSE per placement (M3 per-barrel SFX); retained .../system/<Spice> holds the real state (Clear/False/Unweighed/True)."
@@ -45,6 +45,9 @@
 // The scale's per-pouch topics are built as SCALE_TOPIC_ROOT + spice name.
 // Must match Balancing-Scale printSuccessToMQTT() (MQTT_TOPIC "/<Spice>").
 #define SCALE_TOPIC_ROOT      "MermaidsTale/BalancingScale/"
+// 1 = a barrel counts only after the scale credits it. 0 = right tag alone counts
+// (owner 2026-10-30, while the scale sends no credits). Set back to 1 to restore the gate.
+#define REQUIRE_WEIGH         0
 
 // ------------------------------------------------------------
 // Barrel RFID Tag IDs  (the correct/expected UID for each barrel)

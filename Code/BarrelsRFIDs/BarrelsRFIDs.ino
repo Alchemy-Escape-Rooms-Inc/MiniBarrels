@@ -172,8 +172,8 @@ EspSoftwareSerial::UART rfid4, rfid5;
 // edit the matching TAG_* line in MANIFEST.h and re-flash - nothing here changes.
 // Order here = order of the bullets along the light string.
 Spice spices[NUM_SPICES] = {
-  { "Vanilla",   TAG_VANILLA,   &rfid1 },
-  { "Cloves",    TAG_CLOVES,    &rfid2 },
+  { "Vanilla",   TAG_VANILLA,   &rfid2 },   // owner 11-01: sensors swapped, Vanilla reads on GPIO5
+  { "Cloves",    TAG_CLOVES,    &rfid1 },   // owner 11-01: Cloves reads on GPIO4
   { "Molasses",  TAG_MOLASSES,  &rfid3 },
   { "SugarCane", TAG_SUGARCANE, &rfid4 },
   { "Yeast",     TAG_YEAST,     &rfid5 },

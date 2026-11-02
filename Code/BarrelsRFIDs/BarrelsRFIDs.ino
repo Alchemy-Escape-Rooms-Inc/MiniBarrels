@@ -72,7 +72,7 @@
 #define ID_LEN                 12
 #define TOPIC_BUF              64
 #define DEBUG_RFID             0      // 1 = log every raw byte to USB serial
-#define RAW_DIAG               0     // 1 = RAW per-reader byte/frame counts on /log every 3 s
+#define RAW_DIAG               1     // 1 = RAW per-reader byte/frame counts on /log every 3 s
 
 // WatchTower heartbeat standard = 5 minutes (from MANIFEST.h).
 const unsigned long HEARTBEAT_MS = HEARTBEAT_MS_MANIFEST;

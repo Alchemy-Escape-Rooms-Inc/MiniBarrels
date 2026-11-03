@@ -643,6 +643,9 @@ void reportRaw() {
     n += snprintf(buf + n, sizeof(buf) - n, " %s=%lub/%luf/len%u", s.name,
                   (unsigned long)s.rawBytes, (unsigned long)s.rawFrames, s.lastFrameLen);
   }
+#if CLOVES_HALL
+  n += snprintf(buf + n, sizeof(buf) - n, " ClovesPin=%s", digitalRead(S1_RX) ? "HIGH" : "LOW");
+#endif
   mqtt.publish(MQTT_TOPIC_LOG, buf);  // >128 chars, so not via mqttLogf
   // v3.3.7 diag: bytes arrived but no frame passed - show what they were
   for (byte i = 0; i < NUM_SPICES; i++) {

@@ -644,7 +644,7 @@ void reportRaw() {
                   (unsigned long)s.rawBytes, (unsigned long)s.rawFrames, s.lastFrameLen);
   }
 #if CLOVES_HALL
-  n += snprintf(buf + n, sizeof(buf) - n, " ClovesPin=%s", digitalRead(S1_RX) ? "HIGH" : "LOW");
+  n += snprintf(buf + n, sizeof(buf) - n, " ClovesPin=%s", digitalRead(CLOVES_SWITCH_PIN) ? "HIGH" : "LOW");
 #endif
   mqtt.publish(MQTT_TOPIC_LOG, buf);  // >128 chars, so not via mqttLogf
   // v3.3.7 diag: bytes arrived but no frame passed - show what they were
@@ -671,7 +671,7 @@ void reportRaw() {
 //================================================
 void setupRFID() {
 #if CLOVES_HALL
-  pinMode(S1_RX, INPUT_PULLUP);   // hall sensor output (open-collector types need the pull-up)
+  pinMode(CLOVES_SWITCH_PIN, INPUT_PULLUP);   // reed switch to GND (owner 11-03: own pin, no RFID divider on it)
 #else
   rfid1.begin(RFID_BAUD, SERIAL_8N1,   S1_RX, -1);
 #endif
@@ -755,7 +755,7 @@ void loop() {
   }
 
   for (byte i = 0; i < NUM_SPICES; i++) {
-    if (spices[i].isHall) scanHall(spices[i], S1_RX);
+    if (spices[i].isHall) scanHall(spices[i], CLOVES_SWITCH_PIN);
     else                  scan(spices[i]);
   }
 #if RAW_DIAG

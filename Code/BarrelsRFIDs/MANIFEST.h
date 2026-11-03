@@ -13,7 +13,7 @@
 #pragma once
 
 #define DEVICE_NAME           "MiniBarrels"
-#define FIRMWARE_VERSION      "3.4.1"
+#define FIRMWARE_VERSION      "3.4.2"
 #define BOARD_TYPE            "ESP32-S3"
 #define ROOM                  "MermaidsTale"
 #define DESCRIPTION           "Five RFID barrel readers with WS2811 feedback lights. A barrel counts as CORRECT only when the right tag is on its reader AND the BalancingScale has reported that spice weighed correctly (MermaidsTale/BalancingScale/<Spice>=true). Light per barrel: off (empty/wrong/right-but-unweighed), YELLOW (correct), all GREEN when all five correct -> status=SOLVED -> M3 barrel-piston finale. Public MermaidsTale/MiniBarrels/<Spice> gets a 2s True/False PULSE per placement (M3 per-barrel SFX); retained .../system/<Spice> holds the real state (Clear/False/Unweighed/True)."
@@ -54,6 +54,9 @@
 // HALL_ACTIVE_LOW 1 = pin goes LOW when the magnet is there (A3144/KY-003 style).
 #define CLOVES_HALL           1
 #define HALL_ACTIVE_LOW       1
+// v3.4.2 (owner 11-03): Cloves is now a REED SWITCH between GPIO42 and GND,
+// internal pull-up. GPIO4 sat at 1.95 V (old RFID divider pulls it down), so it moved.
+#define CLOVES_SWITCH_PIN     42
 
 // ------------------------------------------------------------
 // Barrel RFID Tag IDs  (the correct/expected UID for each barrel)
@@ -82,7 +85,7 @@
 #define LED_BRIGHTNESS        200      // 0-255 global cap
 
 // Hardware - RFID reader RX pins (one UART per barrel) + light data pin
-#define PIN_CONFIG            "VANILLA_RX=5 (UART1), CLOVES_HALL=4 (hall sensor, INPUT_PULLUP, active LOW), MOLASSES_RX=6 (UART2), SUGARCANE_RX=7 (SoftSerial), YEAST_RX=15 (SoftSerial), LED_DATA=16 (WS2811 string)"
+#define PIN_CONFIG            "VANILLA_RX=5 (UART1), CLOVES_SWITCH=42 (reed switch to GND, INPUT_PULLUP, closed=LOW=present; GPIO4 unused), MOLASSES_RX=6 (UART2), SUGARCANE_RX=7 (SoftSerial), YEAST_RX=15 (SoftSerial), LED_DATA=16 (WS2811 string)"
 #define COMPONENTS            "5x serial RFID readers (STX/ETX framed, 9600 baud). Vanilla/Cloves/Molasses on hardware UARTs, SugarCane/Yeast on SoftwareSerial. 1x WS2811 12V bullet-pixel string (FastLED), LEDS_PER_BARREL bullets per barrel, single data line on GPIO16."
 #define KNOWN_QUIRKS          "MUST be built with 'USB CDC On Boot = Enabled' (CDCOnBoot=cdc) or Serial steals UART0 and kills the Vanilla reader. Readers re-report seated tags erratically (4s-2min) and go silent in between - NEVER add silence-based removal (v2.7.1/v2.7.2 flap bug); seated state clears only via different-tag or PUZZLE_RESET. <Spice>Latch topics on the wire belong to M3 (SFX bookkeeping), never publish to them. Tag IDs live in MANIFEST.h - edit there, not in the .ino. v3.0.0 hardening: LWT retained OFFLINE on /status, 30s task WDT, 2min offline self-reboot, non-blocking MQTT retry w/ full retained re-sync on reconnect; heartbeat = fleet-standard HEARTBEAT:STATE:UPxs:RSSIx. v3.1.0 weigh gate: the scale's BalancingScale/<Spice>=true is NON-retained and the scale never sends false - this board mirrors credits to retained system/weighed/<Spice> so a reboot mid-game keeps them; credits clear on PUZZLE_RESET to EITHER this board OR the scale (M3 game reset sends the scale one). A stale credit from an aborted game = send PUZZLE_RESET. Lights: 12V bullets need common ground with the S3 and ideally a 5V level shifter (74AHCT125) on the data line; 3.3V data straight in usually works for short runs. A right barrel that is NOT yet weighed pulses False on the wire (wrong-barrel SFX) and reads Unweighed on system/<Spice> - the AI ignores that value and praises only on True. v3.3.0 OTA: wireless re-flash (hostname MiniBarrels, port 3232, password = Wi-Fi) - arduino-cli upload --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc -p <board IP> --upload-field password=<Wi-Fi pw> Code/BarrelsRFIDs; the IP is in every STATUS reply and the boot /log line. The room board still needs ONE more USB flash (CDC build, native USB COM port) to receive OTA."
 

@@ -158,6 +158,10 @@ struct Spice {
   uint32_t      rawGood;            // v3.3.7 diag: frames that passed the hex + checksum test
   byte          rawTail[16];        // v3.3.7 diag: last bytes off this reader, for RAWHEX
   byte          rawTailPos;
+  bool          isHall;             // v3.4.0: magnet (hall) sensor instead of RFID reader
+  int8_t        hallLevel;          // last debounced pin level (-1 = not read yet)
+  int8_t        hallPending;        // level waiting out the debounce
+  unsigned long hallChangeMs;       // when hallPending first appeared
 };
 
 // Vanilla on UART0 requires "USB CDC On Boot = Enabled" so Serial
@@ -436,6 +440,7 @@ void puzzleReset() {
     spices[i].hasTag         = false;
     spices[i].pulseClearAtMs = 0;
     memset(spices[i].lastUid, 0, ID_LEN);
+    spices[i].hallLevel      = -1;   // hall re-reads the pin and re-seats if the magnet is still there
     setWeighed(spices[i], false, false);
     setSeated(spices[i], ST_CLEAR);
     mqtt.publish(spices[i].topic, STATE_NAMES[ST_CLEAR], true);
@@ -560,6 +565,30 @@ static bool frameValid(const char* rx) {
   return false;
 }
 
+// v3.4.0: Cloves is a hall (magnet) sensor on the old reader pin. The pin
+// holds a steady level while the magnet is there, so - unlike the RFID
+// readers - removal IS real: magnet gone = Clear. Every debounced change
+// is logged on /log so a tech can watch it pick up the magnet.
+const unsigned long HALL_DEBOUNCE_MS = 80;
+
+void scanHall(Spice& s, byte pin) {
+  int lvl = digitalRead(pin);
+  if (lvl != s.hallPending) { s.hallPending = lvl; s.hallChangeMs = millis(); return; }
+  if (lvl == s.hallLevel) return;
+  if (millis() - s.hallChangeMs < HALL_DEBOUNCE_MS) return;
+  s.hallLevel = lvl;
+  bool magnet = HALL_ACTIVE_LOW ? (lvl == LOW) : (lvl == HIGH);
+  mqttLogf("%s hall pin %s -> magnet %s", s.name, lvl ? "HIGH" : "LOW",
+           magnet ? "PRESENT" : "gone");
+  if (magnet) {
+    setSeated(s, ST_TRUE);
+    firePulse(s, s.credited ? ST_TRUE : ST_FALSE);
+    if (!s.credited) mqttLogf("%s magnet seen but NOT weighed yet", s.name);
+  } else {
+    setSeated(s, ST_CLEAR);
+  }
+}
+
 void scan(Spice& s) {
   while (s.port->available()) {
     int b = s.port->read();
@@ -638,7 +667,11 @@ void reportRaw() {
 //            Setup / Loop
 //================================================
 void setupRFID() {
+#if CLOVES_HALL
+  pinMode(S1_RX, INPUT_PULLUP);   // hall sensor output (open-collector types need the pull-up)
+#else
   rfid1.begin(RFID_BAUD, SERIAL_8N1,   S1_RX, -1);
+#endif
   rfid2.begin(RFID_BAUD, SERIAL_8N1,   S2_RX, -1);
   rfid3.begin(RFID_BAUD, SERIAL_8N1,   S3_RX, -1);
   rfid4.begin(RFID_BAUD, SWSERIAL_8N1, S4_RX, -1);
@@ -657,6 +690,9 @@ void setupRFID() {
     spices[i].lastSys        = W_CLEAR;
     spices[i].pulseClearAtMs = 0;
     memset(spices[i].lastUid, 0, ID_LEN);
+    spices[i].isHall         = CLOVES_HALL && strcmp(spices[i].name, "Cloves") == 0;
+    spices[i].hallLevel      = -1;
+    spices[i].hallPending    = -1;
   }
 }
 
@@ -715,7 +751,10 @@ void loop() {
     ESP.restart();
   }
 
-  for (byte i = 0; i < NUM_SPICES; i++) scan(spices[i]);
+  for (byte i = 0; i < NUM_SPICES; i++) {
+    if (spices[i].isHall) scanHall(spices[i], S1_RX);
+    else                  scan(spices[i]);
+  }
 #if RAW_DIAG
   reportRaw();
 #endif

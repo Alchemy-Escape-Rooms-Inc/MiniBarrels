@@ -63,7 +63,13 @@
       116.0
     ]
   },
-  "barrel_names": {},
+  "barrel_names": {
+    "Red": "Vanilla",
+    "Yellow": "Cloves",
+    "Green": "Molasses",
+    "Blue": "SugarCane",
+    "Black": "Yeast"
+  },
   "solution": [
     "Red",
     "Yellow",

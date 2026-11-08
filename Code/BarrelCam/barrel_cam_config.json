@@ -27,7 +27,7 @@
     ]
   ],
   "lid_radius": 85,
-  "max_color_dist": 45.0,
+  "max_color_dist": 60.0,
   "min_blob_px": 250,
   "calibrate_names": [
     "Red",

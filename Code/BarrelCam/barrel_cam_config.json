@@ -1,0 +1,68 @@
+{
+  "camera_ip": "10.1.10.67",
+  "camera_user": "admin",
+  "stream": "h264Preview_01_main",
+  "mqtt_host": "10.1.10.115",
+  "mqtt_topic": "MermaidsTale/MiniBarrels/order",
+  "slots": [
+    [
+      1782,
+      469
+    ],
+    [
+      1695,
+      677
+    ],
+    [
+      1591,
+      897
+    ],
+    [
+      1487,
+      1140
+    ],
+    [
+      1383,
+      1429
+    ]
+  ],
+  "lid_radius": 85,
+  "max_color_dist": 45.0,
+  "min_blob_px": 250,
+  "calibrate_names": [
+    "Red",
+    "Yellow",
+    "Green",
+    "Blue",
+    "Black"
+  ],
+  "colors": {
+    "Red": [
+      177.0,
+      164.0,
+      103.0
+    ],
+    "Yellow": [
+      166.5,
+      122.0,
+      153.0
+    ],
+    "Green": [
+      208.0,
+      96.0,
+      133.0
+    ],
+    "Blue": [
+      115.0,
+      159.0,
+      56.0
+    ],
+    "Black": [
+      37.0,
+      133.0,
+      116.0
+    ]
+  },
+  "barrel_names": {},
+  "solution": []
+}

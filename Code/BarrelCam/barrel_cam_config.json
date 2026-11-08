@@ -64,5 +64,11 @@
     ]
   },
   "barrel_names": {},
-  "solution": []
+  "solution": [
+    "Red",
+    "Yellow",
+    "Green",
+    "Blue",
+    "Black"
+  ]
 }

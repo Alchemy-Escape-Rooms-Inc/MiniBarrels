@@ -456,7 +456,11 @@ def run_forever(cfg, interval):
     from collections import Counter, deque
     nslots = len(cfg["slots"])
     history = [deque(maxlen=5) for _ in range(nslots)]
-    stable = ["empty"] * nslots
+    # None = slot not decided yet. Nothing is reported until EVERY slot has a
+    # majority, so the first report is the real starting layout (2026-11-07:
+    # a half-settled first read looked like "order broken" -> armed -> the next
+    # read "solved" it and M3 fired the barrel finale at startup).
+    stable = [None] * nslots
     print("BarrelCam v%s watching barrels (solution %s)" % (VERSION, ",".join(cfg["solution"])), flush=True)
     while True:
         board.handle_commands()
@@ -472,7 +476,7 @@ def run_forever(cfg, interval):
                 if cnt >= 3:
                     stable[i] = top
             order = tuple(stable)
-            if len(history[0]) >= 3 and order != board.order:
+            if None not in order and order != board.order:
                 board.update(order)
                 board.pub("order", json.dumps(payload([(n, None) for n in order], cfg)))
         board.service(cam_ok)
